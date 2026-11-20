@@ -131,17 +131,29 @@ TODO(you): paste the full table once `--measure` has been run.
 
 Conclusion: TODO(you). Which version runs daily, why, and what it costs in calls and waiting. An honest result such as "the reviewer did not help" is a good answer. Then set that version in `.github/workflows/daily.yml` and in `tests.yml`.
 
+## Executive intelligence brief (extra)
+
+`report.py` builds a one-page HTML brief for decision makers, and the `Executive report` workflow emails it after every successful daily run.
+
+- **What it shows:** a banner and status, the question the agent answers, headlines, a per-coin snapshot with ranks, three Plotly charts (indexed price, latest ranks against the alert line, how unusual each coin has been over 60 days), the AI's analysis, what the agent does in each situation, monitoring triggers for the next review, and the decision history from the Sheet.
+- **Who wrote what is labelled on the page.** Numbers, ranks, headlines and triggers are computed by code. The analysis text is the agent's own latest decision, read back from the Sheet, and it is marked as written by AI. The page also shows whether that decision passed the code guardrails, and cross-checks the AI's coins against the code's own rank check. The report makes no extra AI call.
+- **What it does not contain:** a price forecast or a recommendation. The project is for education only, so the "next moves" section lists monitoring triggers (for example how far a rank is below the alert rank), not predictions.
+- **Run it:** `python report.py` (live Kraken data; set `SHEET_URL` to include the AI analysis and history), `python report.py --email` to also send it, `python report.py --demo` to preview the layout on synthetic data that the page labels as demo data.
+- **Email:** needs the updated `apps_script/Code.gs` (new `report` action, and the `detail` option of `history`) deployed as a new version. Without it the run still finishes and prints a warning that says so.
+- **Limits:** the charts load plotly.js from a CDN, so the HTML file needs an internet connection to draw them; the email body carries the headlines and the AI analysis without charts. Tests: `python tests/test_report.py -v` (15 offline tests).
+
 ## Files
 
 | File | What it is |
 |---|---|
 | `agent.py` | The agent: tools, loop, planner, reviewer, guardrails, delivery, command line |
 | `scenarios.py` | Test mode: fake data and the seven scenarios, plus the `--measure` table |
+| `report.py` | The executive intelligence brief (HTML page and email) |
 | `playbook.md` | The agent's own rules, with a reason and a source for every threshold |
 | `calibrate.py` | Backtest of the alert rank on live Kraken history |
 | `apps_script/Code.gs` | The Google Apps Script web app (history, save, email). No key in it |
-| `tests/test_guardrails.py` | Offline tests |
-| `.github/workflows/daily.yml`, `tests.yml` | The daily run and the tests on every code or playbook change |
+| `tests/test_guardrails.py`, `tests/test_report.py` | Offline tests |
+| `.github/workflows/daily.yml`, `tests.yml`, `report.yml` | The daily run, the tests on every code or playbook change, and the executive brief after each daily run |
 | `AI_LOG.md` | The five most important prompts, and what the AI got wrong or I changed |
 
 Parts of the Kraken fetch and the 30-day calculations are adapted from my Assignment 1 repository (`src/fetch_data.py`, `src/analysis.py`). That repository was not changed.

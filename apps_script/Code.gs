@@ -1,9 +1,10 @@
 /**
  * Crypto Watch Agent: Google Apps Script web app.
  *
- * Two actions, both sent as a POST with a JSON body to  <web app URL>?key=<KEY>
+ * Three actions, all sent as a POST with a JSON body to  <web app URL>?key=<KEY>
  *   history   returns the agent's own recent decisions from the Agent tab (the agent's memory)
  *   save      adds one row to the Agent tab and, when alert is true, sends an email
+ *   report    emails the executive brief: a short HTML summary in the body and the full HTML page as an attachment
  *
  * Deploy: Deploy > New deployment > Web app. Execute as: Me. Who has access: Anyone.
  * After EVERY change: Deploy > Manage deployments > edit > Version: New version > Deploy.
@@ -20,6 +21,8 @@
 const SHEET_NAME = 'Agent';
 const HEADERS = ['Time (UTC)', 'Version', 'Run ID', 'Alert', 'Coins', 'Message', 'Sources', 'Reasoning', 'Blocked reason'];
 const MAX_BODY_CHARS = 20000;
+const MAX_REPORT_CHARS = 600000;   // the executive brief page, sent only with action "report"
+const MAX_SUMMARY_CHARS = 30000;
 const MAX_TEXT_CHARS = 1000;
 const MAX_HISTORY_ROWS = 20;
 const MIN_KEY_LENGTH = 16;
@@ -36,7 +39,7 @@ function doPost(e) {
     if (key.length < MIN_KEY_LENGTH || supplied !== key) return reply_({ success: false, error: 'UNAUTHORIZED' });
 
     const contents = e.postData ? e.postData.contents : '';
-    if (typeof contents !== 'string' || contents.length === 0 || contents.length > MAX_BODY_CHARS) return reply_({ success: false, error: 'INVALID_REQUEST' });
+    if (typeof contents !== 'string' || contents.length === 0 || contents.length > MAX_REPORT_CHARS) return reply_({ success: false, error: 'INVALID_REQUEST' });
     let request;
     try {
       request = JSON.parse(contents);
@@ -44,9 +47,11 @@ function doPost(e) {
       return reply_({ success: false, error: 'INVALID_REQUEST' });
     }
     if (request === null || typeof request !== 'object' || Array.isArray(request)) return reply_({ success: false, error: 'INVALID_REQUEST' });
+    if (request.action !== 'report' && contents.length > MAX_BODY_CHARS) return reply_({ success: false, error: 'INVALID_REQUEST' });
 
     if (request.action === 'history') return reply_(history_(request, props));
     if (request.action === 'save') return reply_(save_(request, props));
+    if (request.action === 'report') return reply_(report_(request, props));
     return reply_({ success: false, error: 'INVALID_ACTION' });
   } catch (err) {
     console.error('doPost failed: ' + (err && err.name ? err.name : 'Error'));   // never log the request or the key
@@ -82,13 +87,20 @@ function history_(request, props) {
   const first = Math.max(2, last - limit + 1);
   const rows = sheet.getRange(first, 1, last - first + 1, HEADERS.length).getValues();
   const decisions = rows.map(function (row) {
-    return {
+    const decision = {
       time: String(row[0]),
       alert: String(row[3]).toUpperCase() === 'TRUE',
       coins: String(row[4]).split(',').map(function (s) { return s.trim(); }).filter(Boolean),
       message: String(row[5]),
       sources: String(row[6]).split('|').map(function (s) { return s.trim(); }).filter(Boolean),
     };
+    if (request.detail === true) {   // only the executive brief asks for these; the agent's memory stays small
+      decision.version = String(row[1]);
+      decision.run_id = String(row[2]);
+      decision.reasoning = String(row[7]);
+      decision.blocked_reason = String(row[8]);
+    }
+    return decision;
   });
   return { success: true, decisions: decisions };
 }
@@ -121,6 +133,27 @@ function save_(request, props) {
     emailed = true;
   }
   return { success: true, row: rowNumber, emailed: emailed };
+}
+
+// The executive brief: a short HTML summary in the email body and the full page as an attachment.
+function report_(request, props) {
+  const page = request.html;
+  const summary = request.summary_html;
+  if (typeof page !== 'string' || page.length === 0 || page.length > MAX_REPORT_CHARS ||
+      typeof summary !== 'string' || summary.length === 0 || summary.length > MAX_SUMMARY_CHARS) {
+    return { success: false, error: 'INVALID_PAYLOAD' };
+  }
+  const to = String(props.getProperty('EMAIL_TO') || '').trim() || Session.getEffectiveUser().getEmail();
+  MailApp.sendEmail({
+    to: to,
+    subject: clean_(request.subject) || 'Crypto watch executive brief',
+    body: 'Open this email in an HTML-capable mail program, and open the attached HTML file in a browser for the charts. ' +
+          'This project is for education only and is not financial advice.',
+    htmlBody: summary,
+    attachments: [Utilities.newBlob(page, 'text/html', 'crypto-watch-executive-brief.html')],
+    name: 'Crypto Watch Agent',
+  });
+  return { success: true, emailed: true };
 }
 
 // Run this ONCE from the editor (Run > authorizeOnce) to grant the Sheet and email permissions.

@@ -1,0 +1,45 @@
+name: Executive report
+
+# Builds the executive intelligence brief right after a successful daily run, and emails it.
+# It can also be started by hand from the Actions tab.
+on:
+  workflow_run:
+    workflows: ["Daily crypto watch"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: executive-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    name: Build the brief and email it
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      PYTHONUTF8: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      # No AI call here: the analysis text is the agent's own latest decision, read from the Sheet.
+      - name: Build the brief and email it
+        env:
+          SHEET_URL: ${{ secrets.SHEET_URL }}
+        run: python report.py --out executive-report.html --email

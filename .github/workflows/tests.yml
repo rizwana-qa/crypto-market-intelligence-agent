@@ -6,6 +6,7 @@ on:
     paths:
       - "agent.py"
       - "scenarios.py"
+      - "report.py"
       - "playbook.md"
       - "requirements.txt"
       - "tests/**"
@@ -40,6 +41,9 @@ jobs:
       # No AI, no network: a scripted AI proves the guardrails and the control flow.
       - name: Guardrail tests (offline)
         run: python tests/test_guardrails.py -v
+
+      - name: Report tests (offline)
+        run: python tests/test_report.py -v
 
       # Fake market data and fake history, real AI. A failed scenario exits with code 1, so this step turns red.
       # Use the same version as the daily workflow.

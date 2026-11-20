@@ -251,6 +251,13 @@ def key_hint(url):
     return "; ".join(notes) + ". It must be identical to the KEY Script Property"
 
 
+def url_shape(url):
+    """The form of the web app URL with the long id hidden, to spot typos such as /exe or a missing part."""
+    parsed = urlparse(url)
+    parts = [f"<{len(part)} characters>" if len(part) > 30 else part for part in parsed.path.split("/")]
+    return f"{parsed.scheme}://{parsed.netloc}{'/'.join(parts)}"
+
+
 def sheet_post(payload):
     url = os.environ.get("SHEET_URL", "").strip()
     if not url:
@@ -260,7 +267,7 @@ def sheet_post(payload):
         response.raise_for_status()
         body = response.json()
     except (requests.RequestException, ValueError) as error:
-        raise AgentError("Sheet request failed: " + redact(repr(error), url))
+        raise AgentError("Sheet request failed: " + redact(repr(error), url) + f" (URL shape: {url_shape(url)})")
     log(f"[sheet] {payload['action']} -> HTTP {response.status_code}")
     if not isinstance(body, dict) or body.get("success") is not True:
         code = body.get("error") if isinstance(body, dict) else "unknown"

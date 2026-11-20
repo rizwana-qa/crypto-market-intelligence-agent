@@ -12,6 +12,17 @@ on:
       - "tests/**"
       - ".github/workflows/tests.yml"
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "Version to test with the real AI: agent (tool loop) or planner (plan, check, run, decide)"
+        type: choice
+        options: [agent, planner]
+        default: agent
+      reviewer:
+        description: "Second AI pass over the draft (extra AI call per scenario)"
+        type: choice
+        options: ["off", "on"]
+        default: "off"
 
 permissions:
   contents: read
@@ -46,9 +57,11 @@ jobs:
         run: python tests/test_report.py -v
 
       # Fake market data and fake history, real AI. A failed scenario exits with code 1, so this step turns red.
-      # Use the same version as the daily workflow.
+      # A push tests the version the daily workflow uses (agent, reviewer off). A manual run can pick another one.
       - name: Scenario tests (fake tools, real AI)
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           SCENARIO_PAUSE: "3"
-        run: python agent.py --test --mode agent --reviewer off
+          MODE: ${{ inputs.mode }}
+          REVIEWER: ${{ inputs.reviewer }}
+        run: python agent.py --test --mode "${MODE:-agent}" --reviewer "${REVIEWER:-off}"

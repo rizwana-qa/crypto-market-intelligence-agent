@@ -42,4 +42,5 @@ jobs:
       - name: Build the brief and email it
         env:
           SHEET_URL: ${{ secrets.SHEET_URL }}
+          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}   # optional and free (Demo key)
         run: python report.py --out executive-report.html --email

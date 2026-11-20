@@ -37,6 +37,10 @@ const EXTRA_TABS = {
     'Rank: drawdown', 'Alert breaches', 'Trend', 'Change 30d %', 'Change 60d %', 'Volume vs 30d avg (x)', 'Rank: volume',
     'Context flags', 'Relative strength vs group %', 'Rank: relative strength', 'History days', 'Status'],
   cross_asset: ['Time (UTC)', 'Run ID', 'Version', 'As of (UTC day)', 'Pair', 'Correlation 30d', 'Rank', 'Flag'],
+  context_data: ['Time (UTC)', 'Run ID', 'Version', 'Coin', 'Kraken mid (USD)', 'Spread %', 'Bid depth within 1% (USD)',
+    'Ask depth within 1% (USD)', 'Funding rate % per hour', 'Funding pays', 'Open interest (USD, approx)', 'Implied vol % (annualised)',
+    'Implied vol rank (1y)', 'Market volume 24h (USD)', 'Market volume vs 30d avg (x)', 'Market volume rank', 'CoinGecko price (USD)',
+    'Price difference %', 'Fear and greed', 'Fear and greed label', 'Alert-rank days %', 'Alert episodes', 'Context flags', 'Status'],
   scenarios: ['Time (UTC)', 'Run ID', 'Version', 'No.', 'Scenario', 'Result', 'Expected', 'Alert', 'Coins', 'Message',
     'Sources', 'Blocked reason', 'AI calls'],
 };

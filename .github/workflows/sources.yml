@@ -1,0 +1,37 @@
+name: Data sources check
+
+# Calls every free data source once and prints what came back. No AI and no tokens are used.
+# Run it by hand from the Actions tab. It fails (red) when a source that is switched on cannot be read.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Call every free source once
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      PYTHONUTF8: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Read every source
+        env:
+          # Optional and free (CoinGecko Demo key). Without it the CoinGecko lines say SKIP and everything else is still checked.
+          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
+        run: python agent.py --check-sources

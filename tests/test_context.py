@@ -237,16 +237,16 @@ class SheetTabs(Quiet):
         self.assertEqual(tab, "scenarios")
         self.assertEqual(len(rows[0]), tab_width("scenarios"))
 
-    def test_the_web_app_only_knows_the_three_extra_tabs(self):
+    def test_the_web_app_only_knows_the_four_extra_tabs(self):
         self.assertEqual(set(re.findall(r"^\s{2}(\w+): \[", re.search(r"const EXTRA_TABS = \{(.*?)\n\};", CODE_GS, re.S).group(1), re.M)),
-                         {"market_data", "cross_asset", "scenarios"})
+                         {"market_data", "cross_asset", "context_data", "scenarios"})
 
 
 class Scenarios(unittest.TestCase):
-    def test_there_are_16_scenarios_with_unique_names(self):
+    def test_there_are_20_scenarios_with_unique_names(self):
         names = [s["name"] for s in scenarios.scenarios()]
-        self.assertEqual(len(names), 16)
-        self.assertEqual(len(set(names)), 16)
+        self.assertEqual(len(names), 20)
+        self.assertEqual(len(set(names)), 20)
 
     def test_only_selects_by_number(self):
         self.assertIsNone(scenarios.parse_only(""))
@@ -272,11 +272,13 @@ class Scenarios(unittest.TestCase):
     def test_a_full_plan_fits_the_step_limit(self):
         steps = ([{"tool": "get_market_summary", "args": {"coin": c}, "reason": "r"} for c in agent.WATCHLIST]
                  + [{"tool": "get_cross_asset_summary", "args": {}, "reason": "r"},
+                    {"tool": "get_market_context", "args": {}, "reason": "r"},
+                    {"tool": "get_alert_history_stats", "args": {}, "reason": "r"},
                     {"tool": "get_recent_decisions", "args": {}, "reason": "r"}]
                  + [{"tool": "search_playbook", "args": {"query": q}, "reason": "r"}
                     for q in ("volatility rule", "drawdown rule", "alert rules repeat alerts wording", "volume correlation relative strength")])
         self.assertLessEqual(len(steps), agent.MAX_PLAN_STEPS)
-        self.assertEqual(len(agent.validate_plan({"steps": steps})), 9)
+        self.assertEqual(len(agent.validate_plan({"steps": steps})), 11)
 
 
 class PlaybookCoversTheNewMetrics(unittest.TestCase):

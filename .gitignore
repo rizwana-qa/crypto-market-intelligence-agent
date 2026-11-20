@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Secrets live in GitHub Secrets and in your terminal only
+.env
+*.env
+.env.*
+
+# Local scratch
+.DS_Store

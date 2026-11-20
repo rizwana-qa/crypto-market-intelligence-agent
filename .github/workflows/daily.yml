@@ -1,0 +1,44 @@
+name: Daily crypto watch
+
+# 05:17 UTC is 09:17 in Dubai (UTC+4). A run can also be started by hand from the Actions tab.
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-crypto-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    name: Run the agent, write the Sheet row, send the email
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      PYTHONUTF8: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      # The version below is the one chosen in Step 13 (see README, "Results and conclusion").
+      # Change --mode (agent or planner) and --reviewer (on or off) here after you have measured.
+      - name: Run the agent
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          SHEET_URL: ${{ secrets.SHEET_URL }}
+        run: python agent.py --mode agent --reviewer off

@@ -1,0 +1,795 @@
+"""Crypto Watch Agent: the AI recommends, the code checks, decides and acts.
+
+Run it:
+    python agent.py                                  one live run (Kraken + Groq + Google Sheet)
+    python agent.py --mode planner --reviewer on     another version of the agent
+    python agent.py --dry-run                        live data and AI, but nothing is posted to the Sheet
+    python agent.py --test                           fake tools, real AI; exit code 1 if a scenario fails
+    python agent.py --measure                        4 versions x 3 runs, prints the results table
+
+This project is for education only and is not financial advice.
+"""
+
+import argparse
+import json
+import math
+import os
+import re
+import statistics
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+import requests
+
+# ==============================================================================================
+# 1. SETTINGS. A coin, a threshold, a banned word or the reviewer switch is changed here.
+# ==============================================================================================
+QUESTION = (
+    "Is BTC, ETH or XRP showing unusual volatility, distance from its 30-day average or drawdown "
+    "in its latest completed daily candle compared with its own history, and is the data reliable "
+    "enough to say so?"
+)
+WATCHLIST = {"BTC": "XBTUSD", "ETH": "ETHUSD", "XRP": "XRPUSD"}  # Kraken calls Bitcoin "XBT"
+# Kraken files the candles under its own name for the pair. A reply under any other key is refused.
+# BTC and ETH were checked in Assignment 1; XRP was checked against Kraken's AssetPairs endpoint.
+RESULT_KEYS = {"XBTUSD": "XXBTZUSD", "ETHUSD": "XETHZUSD", "XRPUSD": "XXRPZUSD"}
+
+WINDOW = 30             # 30 daily returns need 31 closes (same window as Assignment 1)
+MIN_HISTORY_DAYS = 90   # fewer completed candles than this: the history is too short to rank against
+ALERT_RANK = 95.0       # a rank at or above this is "unusual" (see playbook.md, "Alert rules")
+
+DEFAULT_MODE = "agent"  # "agent" (tool loop) or "planner" (plan first, code runs the steps)
+USE_REVIEWER = False    # the reviewer switch; --reviewer on|off overrides it
+MAX_STEPS = 8           # agent loop: the most AI calls before the run stops with an error
+MAX_FIX_ATTEMPTS = 2    # how often the AI may be asked again after an invalid answer
+MAX_REVISIONS = 1       # how often the agent may revise after the reviewer found problems
+MAX_PLAN_STEPS = 8      # planner: the most steps a plan may have
+MAX_MESSAGE_CHARS = 280
+MAX_REASONING_CHARS = 600
+HISTORY_LIMIT = 7       # how many recent decisions the memory tool returns
+MAX_LLM_ATTEMPTS = 4    # tries per AI call when the free tier answers "rate limit"
+
+# The advice filter: an alert message containing any of these (whole words, any case) is blocked.
+BANNED_WORDS = [
+    "buy", "buying", "bought", "sell", "selling", "sold", "long", "short", "hold", "holding",
+    "entry", "exit", "accumulate", "should", "recommend", "recommends", "recommended",
+    "recommendation", "advise", "advice", "take profit", "stop loss", "stop-loss",
+]
+ADVICE_RE = re.compile(r"\b(?:" + "|".join(re.escape(w) for w in BANNED_WORDS) + r")\b", re.IGNORECASE)
+
+MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+KRAKEN_URL = "https://api.kraken.com/0/public/OHLC"
+PLAYBOOK_PATH = Path(__file__).with_name("playbook.md")
+SECONDS_PER_DAY = 86400
+METRICS = ("volatility", "distance", "drawdown")
+STATS = {"llm_calls": 0, "rate_limit_waits": 0}
+
+
+class AgentError(Exception):
+    """The run cannot continue. main() prints it and exits with code 1."""
+
+
+class ShapeError(ValueError):
+    """An AI answer or plan does not have the required shape."""
+
+
+def log(message):
+    print(message, flush=True)
+
+
+def redact(text, *secrets):
+    """Remove secrets (and any key=... parameter) from text before it is printed."""
+    for secret in secrets:
+        if secret:
+            text = text.replace(secret, "[hidden]")
+    return re.sub(r"key=[^&\s'\"]+", "key=[hidden]", text)
+
+
+def format_date(unix_seconds):
+    return datetime.fromtimestamp(unix_seconds, tz=timezone.utc).strftime("%Y-%m-%d")
+
+
+def round_clean(value, digits):
+    return round(value, digits) + 0.0  # "+ 0.0" turns -0.0 into 0.0
+
+
+# ==============================================================================================
+# 2. MARKET TOOL: Kraken data and the numbers. Adapted from Assignment 1 (src/fetch_data.py,
+#    src/analysis.py). Plain arithmetic, no AI.
+# ==============================================================================================
+def parse_candles(raw, pair):
+    """Kraken candle rows are [time, open, high, low, close, vwap, volume, count]; only time and close are used."""
+    candles = []
+    for number, row in enumerate(raw):
+        if not isinstance(row, list) or len(row) != 8:
+            raise ValueError(f"{pair}: candle {number} is not a list of 8 values")
+        timestamp = row[0]
+        if not isinstance(timestamp, int) or isinstance(timestamp, bool):
+            raise ValueError(f"{pair}: candle {number} has no integer timestamp")
+        try:
+            close = float(row[4])
+        except (TypeError, ValueError):
+            raise ValueError(f"{pair}: candle {number} has a close that is not a number")
+        if not math.isfinite(close) or close <= 0:
+            raise ValueError(f"{pair}: candle {number} has a close that is not a positive number")
+        candles.append({"timestamp": timestamp, "close": close})
+    return candles
+
+
+def fetch_candles(pair):
+    """Daily candles for one Kraken pair. Any failure is an error, never a guess."""
+    last_error = "unknown error"
+    for attempt in range(1, 4):
+        try:
+            response = requests.get(KRAKEN_URL, params={"pair": pair, "interval": 1440}, timeout=15)
+            if response.status_code in (429, 500, 502, 503, 504):
+                raise requests.RequestException(f"HTTP {response.status_code}")
+            response.raise_for_status()
+            body = response.json()
+            break
+        except requests.HTTPError as error:  # another 4xx: retrying will not help
+            raise RuntimeError(f"{pair}: Kraken request failed: {error}")
+        except (requests.RequestException, ValueError) as error:
+            last_error = type(error).__name__
+            if attempt < 3:
+                time.sleep(2 ** (attempt - 1))
+    else:
+        raise RuntimeError(f"{pair}: request to Kraken failed after 3 attempts ({last_error})")
+    if not isinstance(body, dict) or body.get("error") or not isinstance(body.get("result"), dict):
+        raise RuntimeError(f"{pair}: Kraken returned an error or an unexpected reply")
+    keys = [key for key in body["result"] if key != "last"]  # "last" is a pointer, not candles
+    if keys != [RESULT_KEYS[pair]]:
+        raise RuntimeError(f"{pair}: unexpected pair key {keys}, expected {RESULT_KEYS[pair]!r}")
+    return parse_candles(body["result"][keys[0]], pair)
+
+
+def completed_closes(candles, now):
+    """(timestamps, closes) of the completed UTC days. The unfinished day of today is dropped."""
+    today = int(now.timestamp()) // SECONDS_PER_DAY * SECONDS_PER_DAY
+    done = [c for c in candles if c["timestamp"] < today]
+    stamps = [c["timestamp"] for c in done]
+    if len(done) < MIN_HISTORY_DAYS:
+        raise ValueError(f"only {len(done)} completed candles, need at least {MIN_HISTORY_DAYS}")
+    if any(t % SECONDS_PER_DAY for t in stamps):
+        raise ValueError("a candle does not start at midnight UTC")
+    if any(b - a != SECONDS_PER_DAY for a, b in zip(stamps, stamps[1:])):
+        raise ValueError("the daily data has a gap, a duplicate or is out of order")
+    if stamps[-1] != today - SECONDS_PER_DAY:
+        raise ValueError(f"stale data: the latest completed candle is {format_date(stamps[-1])}")
+    return stamps, [c["close"] for c in done]
+
+
+def max_drawdown(closes):
+    """Largest fall from a running peak, as a number <= 0."""
+    peak, worst = closes[0], 0.0
+    for close in closes:
+        peak = max(peak, close)
+        worst = min(worst, close / peak - 1)
+    return worst
+
+
+def metric_series(closes):
+    """Three series aligned with closes (None until 31 closes exist): volatility, distance, drawdown depth."""
+    n = len(closes)
+    returns = [later / earlier - 1 for earlier, later in zip(closes, closes[1:])]
+    volatility, distance, depth = [None] * n, [None] * n, [None] * n
+    for i in range(WINDOW, n):
+        volatility[i] = statistics.stdev(returns[i - WINDOW:i])           # sample st. dev. of 30 returns
+        distance[i] = closes[i] / statistics.fmean(closes[i - WINDOW + 1:i + 1]) - 1  # vs 30-day average
+        depth[i] = -max_drawdown(closes[i - WINDOW:i + 1])                # 31 closes, depth >= 0
+    return {"volatility": volatility, "distance": distance, "drawdown": depth}, returns
+
+
+def percentile_rank(values, latest):
+    """0 to 100: the share of values below latest, counting a tie as half."""
+    below = sum(1 for v in values if v < latest)
+    ties = sum(1 for v in values if v == latest)
+    return 100.0 * (below + 0.5 * ties) / len(values)
+
+
+def ranks_at(series_by_metric, i):
+    """Rank of day i inside the history up to and including day i, for each metric."""
+    ranks = {}
+    for name, series in series_by_metric.items():
+        values = [abs(v) if name == "distance" else v for v in series[:i + 1] if v is not None]
+        ranks[name] = percentile_rank(values, values[-1])
+    return ranks
+
+
+def add_breaches(summary):
+    """Python, not the AI, says which ranks reach the alert rank."""
+    summary["breaches"] = [m for m in METRICS if summary["ranks"][m] >= ALERT_RANK]
+    return summary
+
+
+def summarize(coin, stamps, closes):
+    """The small summary the AI sees: never the 700 candles."""
+    series, returns = metric_series(closes)
+    last = len(closes) - 1
+    ranks = ranks_at(series, last)
+    return add_breaches({
+        "coin": coin,
+        "pair": WATCHLIST[coin],
+        "as_of": format_date(stamps[-1]),
+        "last_close": round_clean(closes[-1], 4),
+        "daily_return_pct": round_clean(returns[-1] * 100, 2),
+        "dist_from_30d_avg_pct": round_clean(series["distance"][last] * 100, 2),
+        "volatility_30d_daily_pct": round_clean(series["volatility"][last] * 100, 2),
+        "max_drawdown_30d_pct": round_clean(-series["drawdown"][last] * 100, 2),
+        "ranks": {name: round_clean(rank, 1) for name, rank in ranks.items()},
+        "history_days": len(closes),
+    })
+
+
+def tool_market_summary(coin):
+    pair = WATCHLIST[coin]
+    try:
+        stamps, closes = completed_closes(fetch_candles(pair), datetime.now(timezone.utc))
+        return summarize(coin, stamps, closes)
+    except (RuntimeError, ValueError, statistics.StatisticsError) as error:
+        return {"coin": coin, "error": str(error)}
+
+
+# ==============================================================================================
+# 3. GOOGLE SHEET (Apps Script web app): memory tool and delivery. The key travels inside SHEET_URL.
+# ==============================================================================================
+def sheet_post(payload):
+    url = os.environ.get("SHEET_URL", "")
+    if not url:
+        raise AgentError("SHEET_URL is not set")
+    try:
+        response = requests.post(url, json=payload, timeout=60)
+        response.raise_for_status()
+        body = response.json()
+    except (requests.RequestException, ValueError) as error:
+        raise AgentError("Sheet request failed: " + redact(repr(error), url))
+    log(f"[sheet] {payload['action']} -> HTTP {response.status_code}")
+    if not isinstance(body, dict) or body.get("success") is not True:
+        code = body.get("error") if isinstance(body, dict) else "unknown"
+        raise AgentError(f"The Sheet web app refused the request: {code}")
+    return body
+
+
+def tool_recent_decisions():
+    try:
+        body = sheet_post({"action": "history", "limit": HISTORY_LIMIT})
+    except AgentError as error:
+        return {"error": f"history unavailable: {error}"}
+    return {"decisions": body.get("decisions", [])}
+
+
+def deliver(decision, version):
+    """One row in the Agent tab; the web app also sends the email when alert is true."""
+    payload = {
+        "action": "save",
+        "time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "version": version,
+        "run_id": os.environ.get("GITHUB_RUN_ID", "local"),
+        "alert": decision["alert"],
+        "coins": decision["coins"],
+        "message": decision["message"],
+        "sources": decision["sources"],
+        "reasoning": decision["reasoning"],
+        "blocked_reason": decision["blocked_reason"],
+    }
+    body = sheet_post(payload)
+    log(f"Delivered: row {body.get('row')}, email sent: {body.get('emailed')}")
+
+
+# ==============================================================================================
+# 4. PLAYBOOK TOOL: search playbook.md (RAG). Matches words, not meaning.
+# ==============================================================================================
+STOPWORDS = {"the", "and", "for", "are", "with", "that", "this", "when", "what", "from", "not", "any", "how"}
+
+
+def load_playbook(path=PLAYBOOK_PATH):
+    """Sections that start with a line beginning '## '. Text before the first one is ignored."""
+    try:
+        lines = Path(path).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        raise AgentError("playbook.md could not be read")
+    sections, title, body = [], None, []
+    for line in lines:
+        if line.startswith("## "):
+            if title:
+                sections.append({"title": title, "text": "\n".join(body).strip()})
+            title, body = line[3:].strip(), []
+        elif title:
+            body.append(line)
+    if title:
+        sections.append({"title": title, "text": "\n".join(body).strip()})
+    if not sections:
+        raise AgentError("playbook.md has no sections")
+    return sections
+
+
+def tokens(text):
+    return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if len(w) > 2 and w not in STOPWORDS}
+
+
+def tool_search_playbook(query):
+    wanted = tokens(query)
+    scored = []
+    for order, section in enumerate(load_playbook()):
+        score = 3 * len(wanted & tokens(section["title"])) + len(wanted & tokens(section["text"]))
+        if score:
+            scored.append((-score, order, section))
+    scored.sort(key=lambda item: item[:2])
+    best = [section for _, _, section in scored[:2]]
+    if not best:
+        return {"sections": [], "note": "no section matched; try other words"}
+    return {"sections": best}
+
+
+# ==============================================================================================
+# 5. TOOL REGISTRY AND THE RULES FOR CALLING TOOLS
+# ==============================================================================================
+TOOL_SPECS = {
+    "get_market_summary": {
+        "description": (
+            "Live Kraken daily data for ONE watchlist coin: last close, percent distance from its 30-day "
+            "average, 30-day daily volatility and 30-day maximum drawdown, each ranked 0-100 against that "
+            "coin's own history, plus 'breaches' (the ranks at or above the alert rank). "
+            "Returns an error object when the data is unavailable."
+        ),
+        "params": {"coin": {"type": "string", "enum": list(WATCHLIST)}},
+    },
+    "get_recent_decisions": {
+        "description": (
+            "Your own most recent decisions from the Sheet (time, alert, coins, message), oldest first. "
+            "Use it so you do not repeat an alert."
+        ),
+        "params": {},
+    },
+    "search_playbook": {
+        "description": (
+            "Search the playbook (own rules, thresholds, wording rules) by words. Returns the best "
+            "matching sections with their exact titles. Cite those titles in 'sources'."
+        ),
+        "params": {"query": {"type": "string"}},
+    },
+}
+TOOLS = {
+    "get_market_summary": tool_market_summary,
+    "get_recent_decisions": tool_recent_decisions,
+    "search_playbook": tool_search_playbook,
+}
+
+
+def groq_tools():
+    return [
+        {"type": "function", "function": {
+            "name": name,
+            "description": spec["description"],
+            "parameters": {"type": "object", "properties": spec["params"],
+                           "required": list(spec["params"]), "additionalProperties": False},
+        }}
+        for name, spec in TOOL_SPECS.items()
+    ]
+
+
+def check_call(name, args):
+    """Guardrail: None if the call is allowed, otherwise the reason it is not."""
+    if not isinstance(name, str) or name not in TOOL_SPECS:
+        return f"tool {name!r} is not on the allowed list {sorted(TOOL_SPECS)}"
+    params = TOOL_SPECS[name]["params"]
+    if not isinstance(args, dict) or set(args) != set(params):
+        return f"{name} needs exactly these arguments: {sorted(params)}"
+    for key in params:
+        if not isinstance(args[key], str) or not args[key].strip():
+            return f"argument {key!r} must be a non-empty string"
+    if "coin" in args and args["coin"].strip().upper() not in WATCHLIST:
+        return f"coin {args['coin']!r} is not on the watchlist {sorted(WATCHLIST)}"
+    if "query" in args and len(args["query"]) > 200:
+        return "query is longer than 200 characters"
+    return None
+
+
+def normalise_args(args):
+    clean = {key: value.strip() for key, value in args.items()}
+    if "coin" in clean:
+        clean["coin"] = clean["coin"].upper()
+    return clean
+
+
+def run_tool(tools, name, args, evidence):
+    """The code runs the tool, never the AI. Every call the AI asks for is logged."""
+    problem = check_call(name, args)
+    if problem:
+        log(f"TOOL BLOCKED {name} {json.dumps(args, default=str)}: {problem}")
+        return {"error": problem}
+    args = normalise_args(args)
+    log(f"TOOL {name} {json.dumps(args)}")
+    try:
+        result = tools[name](**args)
+    except Exception as error:  # a broken tool must not crash the agent; it becomes an error result
+        result = {"error": f"tool failed: {type(error).__name__}"}
+    evidence.append({"tool": name, "args": args, "result": result})
+    return result
+
+
+# ==============================================================================================
+# 6. THE AI (Groq) AND THE PROMPTS
+# ==============================================================================================
+RULES = """Rules:
+- Alert only when a playbook rule says the numbers justify it. Do not repeat an alert that your recent decisions already show.
+- Use only numbers that the tools returned. If a tool returned an error, say the data was unavailable. Never estimate or invent a number.
+- Describe what the numbers show. Give no advice and no prediction: never use the words buy, sell, long, short or hold, and never tell anyone what to do."""
+
+FORMAT = """Your final answer is ONLY a JSON object and nothing else:
+{"alert": true or false, "coins": ["BTC"], "message": "...", "sources": ["exact playbook section titles"], "reasoning": "..."}
+- message: the alert text, at most 280 characters; an empty string when alert is false.
+- sources: the playbook section titles you relied on, copied exactly from search_playbook results.
+- reasoning: at most 600 characters; copy numbers exactly from the tool results."""
+
+INTRO = ("You are a crypto market watch agent. This is for education only.\n"
+         f"Watchlist: {', '.join(WATCHLIST)} (USD pairs). Your daily question: {QUESTION}\n")
+
+SYSTEM_PROMPT = INTRO + """
+How to work:
+1. Call get_market_summary for every watchlist coin.
+2. Call get_recent_decisions to see your own recent alerts.
+3. Call search_playbook for the rules that apply (alert rules, repeat alerts, wording rules, and the rule for each metric that looks unusual).
+4. Then give the final answer.
+
+""" + RULES + "\n\n" + FORMAT
+
+DECIDE_PROMPT = INTRO + "\nYou are given the evidence: everything the tools returned.\n\n" + RULES + "\n\n" + FORMAT
+
+PLAN_PROMPT = INTRO + """
+Write the plan for today's work as ONLY a JSON object:
+{"steps": [{"tool": "...", "args": {...}, "reason": "..."}]}
+Rules: at most %d steps; use only the tools below; every coin must be one of the watchlist. The plan must gather market data for every watchlist coin, your recent decisions, and the playbook rules you will need (alert rules, repeat alerts, wording rules, and the rule for each metric).
+Tools:
+%s"""
+
+REVIEW_PROMPT = """You review the draft decision of a crypto watch agent (education only). You see the evidence (everything the tools returned), the playbook and the draft.
+Check each point:
+1. Every number in the draft message and reasoning appears in the evidence.
+2. If alert is true: for each named coin the evidence shows that a playbook rule is met, and the sources contain that rule's section title.
+3. If alert is false: no coin meets an alert rule that has not already been alerted.
+4. The draft does not repeat an alert that the recent decisions already show.
+5. Nothing sounds like advice (buy, sell, long, short, hold, should, recommend).
+Reply with ONLY a JSON object: {"approved": true or false, "problems": ["short problem", ...]}. Approve when there is no problem."""
+
+
+def tool_list_text():
+    return "\n".join(f"- {name}({', '.join(spec['params'])}): {spec['description']}"
+                     for name, spec in TOOL_SPECS.items())
+
+
+def call_llm(messages, tools=None):
+    """One Groq chat call. Waits and retries on a rate limit. Returns the assistant message."""
+    key = os.environ.get("GROQ_API_KEY", "")
+    if not key:
+        raise AgentError("GROQ_API_KEY is not set")
+    payload = {"model": MODEL, "messages": messages, "temperature": 0}
+    if tools:
+        payload.update(tools=tools, tool_choice="auto")
+    for attempt in range(1, MAX_LLM_ATTEMPTS + 1):
+        try:
+            response = requests.post(GROQ_URL, headers={"Authorization": f"Bearer {key}"}, json=payload, timeout=90)
+        except requests.RequestException as error:
+            raise AgentError(f"Groq request failed: {type(error).__name__}")
+        if response.status_code == 429 and attempt < MAX_LLM_ATTEMPTS:
+            try:
+                wait = min(float(response.headers.get("retry-after", 20)), 90)
+            except ValueError:
+                wait = 20
+            STATS["rate_limit_waits"] += 1
+            log(f"Groq rate limit: waiting {wait:.0f}s (attempt {attempt} of {MAX_LLM_ATTEMPTS})")
+            time.sleep(wait + 1)
+            continue
+        if response.status_code == 400 and "tool_use_failed" in response.text:
+            STATS["llm_calls"] += 1  # the model produced a malformed tool call; treated as an empty reply
+            return {"role": "assistant", "content": ""}
+        if not response.ok:
+            raise AgentError(f"Groq error {response.status_code}: {response.text[:300]}")
+        STATS["llm_calls"] += 1
+        return response.json()["choices"][0]["message"]
+    raise AgentError("Groq kept answering with a rate limit")
+
+
+def extract_json(text):
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        raise ShapeError("the reply holds no JSON object (empty reply or malformed tool call)")
+    try:
+        data = json.loads(text[start:end + 1])
+    except ValueError:
+        raise ShapeError("the reply is not valid JSON")
+    if not isinstance(data, dict):
+        raise ShapeError("the JSON must be an object")
+    return data
+
+
+def parse_decision(text):
+    """Guardrail: the answer must be JSON with the right keys and shapes, or the AI is asked again."""
+    data = extract_json(text)
+    missing = [k for k in ("alert", "coins", "message", "sources", "reasoning") if k not in data]
+    if missing:
+        raise ShapeError(f"missing keys: {missing}")
+    if not isinstance(data["alert"], bool):
+        raise ShapeError("'alert' must be true or false")
+    if not isinstance(data["coins"], list) or not all(isinstance(c, str) for c in data["coins"]):
+        raise ShapeError("'coins' must be a list of coin symbols")
+    coins = [c.strip().upper() for c in data["coins"]]
+    bad = [c for c in coins if c not in WATCHLIST]
+    if bad:
+        raise ShapeError(f"coins {bad} are not on the watchlist {sorted(WATCHLIST)}")
+    if not isinstance(data["message"], str) or not isinstance(data["reasoning"], str):
+        raise ShapeError("'message' and 'reasoning' must be text")
+    if not isinstance(data["sources"], list) or not all(isinstance(s, str) for s in data["sources"]):
+        raise ShapeError("'sources' must be a list of section titles")
+    message = data["message"].strip()
+    if data["alert"] and not message:
+        raise ShapeError("an alert needs a message")
+    if data["alert"] and not coins:
+        raise ShapeError("an alert needs at least one coin")
+    if len(message) > MAX_MESSAGE_CHARS:
+        raise ShapeError(f"the message is longer than {MAX_MESSAGE_CHARS} characters")
+    return {
+        "alert": data["alert"],
+        "coins": coins,
+        "message": message if data["alert"] else "",
+        "sources": [s.strip() for s in data["sources"]],
+        "reasoning": data["reasoning"].strip()[:MAX_REASONING_CHARS],
+    }
+
+
+def evidence_text(evidence):
+    return json.dumps(evidence, indent=1, default=str)
+
+
+# ==============================================================================================
+# 7. VERSION 1: THE AGENT LOOP. The AI asks for tools, the code runs them, the AI answers.
+# ==============================================================================================
+def run_agent_loop(tools):
+    messages = [{"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": "Do today's watch now."}]
+    evidence, fixes = [], 0
+    for step in range(1, MAX_STEPS + 1):
+        message = call_llm(messages, tools=groq_tools())
+        calls = message.get("tool_calls") or []
+        if calls:
+            messages.append({"role": "assistant", "content": message.get("content") or None, "tool_calls": [
+                {"id": c["id"], "type": "function",
+                 "function": {"name": c["function"]["name"], "arguments": c["function"].get("arguments") or "{}"}}
+                for c in calls]})
+            for call in calls:
+                name = call["function"]["name"]
+                try:
+                    args = json.loads(call["function"].get("arguments") or "{}")
+                except ValueError:
+                    args = None
+                result = run_tool(tools, name, args, evidence)
+                messages.append({"role": "tool", "tool_call_id": call["id"], "content": json.dumps(result, default=str)})
+            continue
+        content = message.get("content") or ""
+        try:
+            return parse_decision(content), evidence
+        except ShapeError as error:
+            fixes += 1
+            log(f"Answer not valid ({error}); asking again ({fixes} of {MAX_FIX_ATTEMPTS})")
+            if fixes > MAX_FIX_ATTEMPTS:
+                raise AgentError(f"The AI did not give a valid answer after {MAX_FIX_ATTEMPTS} retries: {error}")
+            messages.append({"role": "assistant", "content": content or "(empty)"})
+            messages.append({"role": "user", "content":
+                             f"That was not valid: {error}. Call a tool with valid arguments, or reply with ONLY the final JSON object."})
+    raise AgentError(f"The agent did not finish in time (step limit {MAX_STEPS})")
+
+
+# ==============================================================================================
+# 8. VERSION 2: THE PLANNER. The AI writes a plan, the code validates it and runs every step,
+#    then the AI decides from the results. The AI never runs a tool.
+# ==============================================================================================
+def validate_plan(data):
+    steps = data.get("steps")
+    if not isinstance(steps, list) or not steps:
+        raise ShapeError("'steps' must be a non-empty list")
+    if len(steps) > MAX_PLAN_STEPS:
+        raise ShapeError(f"the plan has {len(steps)} steps, the maximum is {MAX_PLAN_STEPS}")
+    clean = []
+    for number, step in enumerate(steps, 1):
+        if not isinstance(step, dict) or set(step) != {"tool", "args", "reason"}:
+            raise ShapeError(f"step {number} needs exactly the keys tool, args, reason")
+        if not isinstance(step["reason"], str) or not step["reason"].strip():
+            raise ShapeError(f"step {number} needs a reason")
+        problem = check_call(step["tool"], step["args"])
+        if problem:
+            raise ShapeError(f"step {number}: {problem}")
+        clean.append({"tool": step["tool"], "args": normalise_args(step["args"]), "reason": step["reason"].strip()})
+    return clean
+
+
+def make_plan():
+    messages = [{"role": "system", "content": PLAN_PROMPT % (MAX_PLAN_STEPS, tool_list_text())},
+                {"role": "user", "content": "Write the plan."}]
+    for attempt in (1, 2):
+        reply = call_llm(messages).get("content") or ""
+        try:
+            return validate_plan(extract_json(reply))
+        except ShapeError as error:
+            if attempt == 2:
+                raise AgentError(f"The plan was not valid twice, so the run stops: {error}")
+            log(f"The plan was not valid, trying again: {error}")
+            messages.append({"role": "assistant", "content": reply or "(empty)"})
+            messages.append({"role": "user", "content": f"The plan was not valid: {error}. Write a corrected plan as ONLY the JSON object."})
+
+
+def ask_for_decision(evidence):
+    messages = [{"role": "system", "content": DECIDE_PROMPT},
+                {"role": "user", "content": "Evidence:\n" + evidence_text(evidence) + "\n\nGive the final answer."}]
+    for fixes in range(MAX_FIX_ATTEMPTS + 1):
+        content = call_llm(messages).get("content") or ""
+        try:
+            return parse_decision(content)
+        except ShapeError as error:
+            log(f"Answer not valid ({error}); asking again ({fixes + 1} of {MAX_FIX_ATTEMPTS})")
+            messages.append({"role": "assistant", "content": content or "(empty)"})
+            messages.append({"role": "user", "content": f"That was not valid: {error}. Reply with ONLY the final JSON object."})
+    raise AgentError(f"The AI did not give a valid answer after {MAX_FIX_ATTEMPTS} retries")
+
+
+def run_planner(tools):
+    plan = make_plan()
+    log(f"Plan accepted: {len(plan)} steps")
+    evidence = []
+    for step in plan:
+        log(f"STEP {step['tool']}: {step['reason']}")
+        run_tool(tools, step["tool"], step["args"], evidence)
+    return ask_for_decision(evidence), evidence
+
+
+# ==============================================================================================
+# 9. THE REVIEWER (reflection): a second pass over the draft, with a switch and a revision limit
+# ==============================================================================================
+ALLOWED_NUMBERS = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 30, 31, 90, 95, 100, 280, 600}
+NUMBER_RE = re.compile(r"(?<![\w.])[-+]?\d[\d,]*\.?\d*")
+
+
+def numbers_in(text):
+    found = []
+    for raw in NUMBER_RE.findall(text):
+        cleaned = raw.replace(",", "").rstrip(".")
+        try:
+            found.append((raw, float(cleaned), len(cleaned.split(".")[1]) if "." in cleaned else 0))
+        except ValueError:
+            continue
+    return found
+
+
+def unsupported_numbers(text, evidence_json):
+    """Numbers in text that no number in the evidence matches (to the precision that was written)."""
+    known = [abs(value) for _, value, _ in numbers_in(evidence_json)]
+    bad = []
+    for raw, value, decimals in numbers_in(text):
+        tolerance = 0.5 * 10 ** -decimals + 1e-9
+        if abs(value) in ALLOWED_NUMBERS or any(abs(abs(value) - k) <= tolerance for k in known):
+            continue
+        bad.append(raw)
+    return bad
+
+
+def review_draft(draft, evidence):
+    """One reviewer call. A broken reply or a failed call never blocks the job: the draft is kept."""
+    shown = evidence_text(evidence)
+    findings = unsupported_numbers(draft["message"] + " " + draft["reasoning"], shown)
+    playbook = "\n\n".join(f"## {s['title']}\n{s['text']}" for s in load_playbook())
+    content = (f"Evidence:\n{shown}\n\nPlaybook:\n{playbook}\n\nDraft decision:\n{json.dumps(draft)}\n\n"
+               f"A code check found these numbers in the draft that are not in the evidence: {findings}")
+    try:
+        reply = call_llm([{"role": "system", "content": REVIEW_PROMPT}, {"role": "user", "content": content}])
+        verdict = extract_json(reply.get("content") or "")
+        problems = verdict.get("problems", [])
+        if not isinstance(verdict.get("approved"), bool) or not isinstance(problems, list):
+            raise ShapeError("the reviewer reply has the wrong shape")
+        return {"approved": verdict["approved"], "problems": [str(p)[:200] for p in problems][:6]}
+    except (ShapeError, AgentError) as error:
+        log(f"REVIEW skipped, the reviewer reply was not usable ({error}); the code guardrails still apply")
+        return {"approved": True, "problems": []}
+
+
+def revise_draft(draft, problems, evidence):
+    content = ("Evidence:\n" + evidence_text(evidence) + f"\n\nYour draft:\n{json.dumps(draft)}\n\n"
+               "A reviewer found these problems:\n- " + "\n- ".join(problems) +
+               "\n\nReturn the corrected final JSON. If the problems cannot be fixed, set alert to false.")
+    reply = call_llm([{"role": "system", "content": DECIDE_PROMPT}, {"role": "user", "content": content}])
+    return parse_decision(reply.get("content") or "")
+
+
+def review_and_revise(draft, evidence):
+    verdict = review_draft(draft, evidence)
+    if verdict["approved"]:
+        log("REVIEW approved the draft")
+        return draft
+    log("REVIEW found problems: " + "; ".join(verdict["problems"]))
+    for _ in range(MAX_REVISIONS):
+        try:
+            draft = revise_draft(draft, verdict["problems"], evidence)
+            log("REVIEW: the agent revised its draft once")
+        except (ShapeError, AgentError) as error:
+            log(f"REVIEW: the revision was not usable ({error}); keeping the first draft")
+    return draft
+
+
+# ==============================================================================================
+# 10. GUARDRAILS IN CODE, applied last, after the AI (and the reviewer) have answered
+# ==============================================================================================
+def apply_guardrails(draft, valid_titles, evidence):
+    """Blocks an alert that breaks a rule. The AI cannot talk its way past this function."""
+    final = dict(draft, blocked_reason="")
+    canonical = {title.lower(): title for title in valid_titles}
+    checked = [canonical.get(s.strip().lower()) for s in draft["sources"]]
+    invalid = [s for s, c in zip(draft["sources"], checked) if c is None]
+    final["sources"] = list(dict.fromkeys(c for c in checked if c))
+    reason = ""
+    if draft["alert"]:
+        if invalid or not final["sources"]:
+            reason = "no valid source: every source must be a real playbook section title"
+        elif ADVICE_RE.search(draft["message"]):
+            reason = "advice language in the message"
+        elif not any(e["tool"] == "get_market_summary" and "error" not in e["result"] for e in evidence):
+            reason = "no valid market data in this run"
+    if reason:
+        log(f"GUARDRAIL blocked the alert: {reason}")
+        final.update(alert=False, coins=[], message="", blocked_reason=reason)
+    return final
+
+
+# ==============================================================================================
+# 11. PUTTING IT TOGETHER: plan or loop, then reviewer, then guardrails
+# ==============================================================================================
+def version_name(mode, use_reviewer):
+    return ("Planner" if mode == "planner" else "Agent loop") + (" + reviewer" if use_reviewer else "")
+
+
+def decide(mode, use_reviewer, tools):
+    draft, evidence = run_planner(tools) if mode == "planner" else run_agent_loop(tools)
+    if use_reviewer:
+        draft = review_and_revise(draft, evidence)
+    titles = [section["title"] for section in load_playbook()]
+    return apply_guardrails(draft, titles, evidence), evidence
+
+
+def run_live(mode, use_reviewer, dry_run):
+    version = version_name(mode, use_reviewer)
+    log(f"Version: {version} | model: {MODEL} | watchlist: {', '.join(WATCHLIST)}")
+    decision, _ = decide(mode, use_reviewer, TOOLS)
+    log("Decision: " + json.dumps(decision))
+    if dry_run:
+        log("Dry run: nothing was posted to the Sheet")
+    else:
+        deliver(decision, version)
+    log(f"Run finished: alert={decision['alert']} llm_calls={STATS['llm_calls']}")
+    return 0
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Crypto watch agent (education only, not financial advice).")
+    parser.add_argument("--mode", choices=["agent", "planner"], default=DEFAULT_MODE)
+    parser.add_argument("--reviewer", choices=["on", "off"], default="on" if USE_REVIEWER else "off")
+    parser.add_argument("--dry-run", action="store_true", help="do not post to the Sheet")
+    parser.add_argument("--test", action="store_true", help="run the scenarios on fake tools")
+    parser.add_argument("--measure", action="store_true", help="run all 4 versions several times")
+    parser.add_argument("--runs", type=int, default=3, help="runs per version for --measure")
+    args = parser.parse_args(argv)
+    use_reviewer = args.reviewer == "on"
+    try:
+        if args.measure:
+            import scenarios
+            return scenarios.measure(args.runs)
+        if args.test:
+            import scenarios
+            return scenarios.run_all(args.mode, use_reviewer)["exit_code"]
+        return run_live(args.mode, use_reviewer, args.dry_run)
+    except AgentError as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

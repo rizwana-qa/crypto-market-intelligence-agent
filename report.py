@@ -128,7 +128,7 @@ def metric_value(summary, metric):
     if metric == "volatility":
         return f"{summary['volatility_30d_daily_pct']:.2f}% daily"
     if metric == "distance":
-        return f"{summary['dist_from_30d_avg_pct']:+.2f}% against the average"
+        return f"{summary['dist_from_30d_avg_pct']:+.2f}%"
     return f"{summary['max_drawdown_30d_pct']:.2f}%"
 
 
@@ -510,7 +510,8 @@ def send_email(data, page):
         agent.sheet_post({"action": "report", "subject": subject, "summary_html": build_email(data), "html": page})
     except agent.AgentError as error:
         text = str(error)
-        hint = " Update apps_script/Code.gs from the repository and redeploy it (Manage deployments > New version)." if "INVALID_ACTION" in text else ""
+        hint = (" The deployed web app is the older version. Update apps_script/Code.gs from the repository and redeploy it (Manage deployments > pencil > New version)."
+                if ("INVALID_ACTION" in text or "INVALID_REQUEST" in text) else "")
         print(f"::warning::Report email not sent: {text}.{hint}", flush=True)
         return False
     print("[report] email sent", flush=True)

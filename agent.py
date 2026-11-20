@@ -49,7 +49,7 @@ MAX_PLAN_STEPS = 8      # planner: the most steps a plan may have
 MAX_MESSAGE_CHARS = 280
 MAX_REASONING_CHARS = 600
 HISTORY_LIMIT = 7       # how many recent decisions the memory tool returns
-MAX_LLM_ATTEMPTS = 4    # tries per AI call when the free tier answers "rate limit"
+MAX_LLM_ATTEMPTS = 8    # tries per AI call when the free tier answers "rate limit" (8000 tokens per minute)
 
 # The advice filter: an alert message containing any of these (whole words, any case) is blocked.
 BANNED_WORDS = [
@@ -476,12 +476,13 @@ def call_llm(messages, tools=None):
             raise AgentError(f"Groq request failed: {type(error).__name__}")
         if response.status_code == 429 and attempt < MAX_LLM_ATTEMPTS:
             try:
-                wait = min(float(response.headers.get("retry-after", 20)), 90)
+                wait = float(response.headers.get("retry-after", 20))
             except ValueError:
                 wait = 20
+            wait = min(max(wait, 5) + 3, 60)  # the token window rolls, so a short hint is often not enough
             STATS["rate_limit_waits"] += 1
             log(f"Groq rate limit: waiting {wait:.0f}s (attempt {attempt} of {MAX_LLM_ATTEMPTS})")
-            time.sleep(wait + 1)
+            time.sleep(wait)
             continue
         if response.status_code == 400 and "tool_use_failed" in response.text:
             STATS["llm_calls"] += 1  # the model produced a malformed tool call; treated as an empty reply

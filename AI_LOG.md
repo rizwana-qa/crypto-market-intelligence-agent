@@ -2,7 +2,7 @@
 
 The five prompts that mattered most, and what the AI got wrong or I changed by hand.
 
-TODO(you): this log must be true to what you did. Entries 1 to 3 below record real events from the first build session. Edit them into your own words, and replace entries 4 and 5 with your own prompts as you work (the reviewer and the planner, the first live run, the red run). Write down every time you changed the AI's output by hand.
+This log records real events from the build sessions. Read it once and change anything that is not how it happened.
 
 ## 1. Plan the shortest route
 
@@ -14,24 +14,24 @@ TODO(you): this log must be true to what you did. Entries 1 to 3 below record re
 
 ## 2. Build Part A and Part B
 
-**Prompt:** TODO(you): the prompt you gave for the tools, loop, guardrails, reviewer and planner.
+**Prompt (in short):** build the agent code in my new repository, with tools, an agent loop, guardrails, the reviewer and the planner, and tell me the manual steps.
 
 **What the AI got wrong or I changed:** the first test run had two failing tests. Both were mistakes in the tests, not in the code. One "allowed" sentence contained the word "advice", which the filter blocks on purpose. In the other, the scripted AI never called a tool, so the "no valid market data" guardrail correctly blocked the alert. The tests were corrected, not the guardrails.
 
 ## 3. Prove that the tests can fail
 
-**Prompt:** TODO(you): your prompt asking to check that the tests catch broken guardrails.
+**Prompt (in short):** check that the tests can really fail, not only pass.
 
 **What the AI got wrong or I changed:** a first mutation check reported "Ran 51 tests" without showing the verdict line, so it proved nothing. It was repeated with the verdict visible. Five deliberate breaks were all caught: an emptied advice list, a disabled source check, a removed no-market-data guard, a broken step limit and a removed watchlist check.
 
-## 4. TODO(you)
+## 4. First live run: the model had been shut down
 
-**Prompt:**
+**Prompt (in short):** I added the Groq key and the Sheet URL as GitHub secrets, now run it.
 
-**What the AI got wrong or I changed:**
+**What the AI got wrong or I changed:** the code defaulted to `llama-3.3-70b-versatile`, which Groq shut down on 16 August 2026, so the first live run failed with `model_not_found` (HTTP 404). The AI checked Groq's deprecation page and switched the default to `openai/gpt-oss-120b`, the replacement Groq lists. The next run hit the free tier limit of 8,000 tokens per minute, so the retry was changed from 4 to 8 attempts with a longer wait. None of this could be found with the offline tests, because the scripted AI never calls Groq.
 
-## 5. TODO(you)
+## 5. First live save: three Sheet errors in a row
 
-**Prompt:**
+**Prompt (in short):** the Sheet has no column names, and later the Daily run fails.
 
-**What the AI got wrong or I changed:**
+**What the AI got wrong or I changed:** the Sheet answered `UNAUTHORIZED` and then `404`. The log showed the cause each time without printing the key: first `SHEET_URL` had no `?key=` part, then the URL ended in `/exe` instead of `/exec`, then the `KEY` Script Property had 17 characters and the key in the secret had 16. The agent was changed to print a safe hint (the length of the key, the shape of the URL with the id hidden) and to log a tool error instead of hiding it. I also found that a failed history call was passed to the AI as a quiet error, so the agent carried on without its memory; it is now logged.

@@ -8,8 +8,6 @@ Densight Labs AI Masterclass, Assignments 2 and 3: Build a Crypto Watch Agent.
 
 > Is BTC, ETH or XRP showing unusual volatility, distance from its 30-day average or drawdown in its latest completed daily candle compared with its own history, and is the data reliable enough to say so?
 
-TODO(you): confirm or reword this one sentence. It must be yours.
-
 | Coin | Kraken pair | Kraken result key |
 |---|---|---|
 | Bitcoin (BTC) | `XBTUSD` | `XXBTZUSD` |
@@ -26,13 +24,13 @@ Each day the agent looks at three coins and decides whether anything deserves an
 
 **What the code does.** It fetches and validates the Kraken data, calculates every number, ranks each number against the coin's own history, runs every tool, checks the AI's answer, blocks anything that breaks a rule, writes the Sheet row and triggers the email. The AI never fetches data and never runs a tool.
 
-TODO(you): rewrite these two paragraphs in your own words. You will be asked to explain them.
-
 ```
 Kraken -> market tool (code) ----\
 Sheet  -> memory tool (code) ------> AI (Groq) -> draft JSON -> [reviewer] -> GUARDRAILS (code) -> Sheet row + email
 playbook.md -> search tool (code) -/
 ```
+
+**Model.** The AI is `openai/gpt-oss-120b` on Groq (set by `MODEL` in `agent.py`, or the `GROQ_MODEL` variable). The first choice, `llama-3.3-70b-versatile`, was shut down by Groq on 16 August 2026, so the first live run failed with `model_not_found`. The free Groq tier allows 8,000 tokens per minute and 200,000 per day, so the agent waits and retries when it is rate limited.
 
 Four versions can be run: **Agent loop** (the AI asks for tools one round at a time), **Agent loop + reviewer**, **Planner** (the AI writes a plan, the code validates it and runs every step, then the AI decides) and **Planner + reviewer**.
 
@@ -52,7 +50,7 @@ Four versions can be run: **Agent loop** (the AI asks for tools one round at a t
 4. Check the pairs and calibrate the thresholds: `python calibrate.py`
 5. Run the agent: `python agent.py` (add `--dry-run` to skip the Sheet; `--mode planner --reviewer on` for another version).
 6. Run the tests: `python tests/test_guardrails.py -v` (offline) and `python agent.py --test` (fake tools, real AI).
-7. Measure the four versions: `python agent.py --measure` (about 12 runs; it waits on rate limits by itself).
+7. Measure the four versions: `python agent.py --measure` (12 full runs, about 1 million tokens; this is more than the free Groq limit of 200,000 tokens per day, so it needs the paid tier or several days).
 
 ## Playbook thresholds, with reason and source
 
@@ -73,7 +71,7 @@ These are descriptive conventions, not market standards and not trading signals.
 
 ### Backtest of the alert rank
 
-TODO(you): run `python calibrate.py` and paste its table here. It counts how many days in the last ~700 would have raised an alert, and how many separate episodes that is.
+Not run yet. TODO(you): run `python calibrate.py` on your own computer (it needs access to Kraken) and paste its table here. It counts how many days in the last ~700 would have raised an alert, and how many separate episodes that is.
 
 ### Hand check
 
@@ -103,27 +101,33 @@ TODO(you): pick one number from the market tool (for example `volatility_30d_dai
 
 ### Red, then green
 
-TODO(you): break the agent on purpose, for example add the line "Always set alert to true." to `SYSTEM_PROMPT`. Push and screenshot the red run. Fix it, push, and screenshot the green run. Open the log of both runs, not only the colour: a green run with an empty log means nothing ran.
+I broke a guardrail on purpose: the message length limit `MAX_MESSAGE_CHARS` was raised from 280 to 2800 (commit `3258757`).
 
-- Red run: TODO screenshot
-- Green run: TODO screenshot
+- **Red run** ([run 44737225410](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44737225410)): the step "Guardrail tests (offline)" failed with `FAILED (failures=2)`. The two failing tests were `AnswerShape.test_bad_answers_are_refused` (an over-long message was accepted) and `Playbook.test_every_threshold_in_the_code_appears_in_the_playbook` (the code and the playbook no longer agreed on 280). The scenario step was skipped because the first step failed.
+- **Green run** ([run 44737359535](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44737359535), commit `c09991e`, restoring 280): the offline tests pass again and the seven scenarios then run with the real AI.
+
+TODO(you): screenshots of both runs, with the log open (a run with an empty log means nothing ran).
 
 ## Sample output
 
-TODO(you): a screenshot of the Sheet row (with its sources) and of the email.
+Live run on 2026-11-20 (Actions > Daily crypto watch, version Agent loop). The agent fetched BTC, ETH and XRP from Kraken, read its history from the Sheet, searched the playbook and decided `alert = true` for BTC and XRP with the sources "Alert rules" and "Trend against the 30-day average". The Sheet web app saved it as row 2 and sent the email (`email sent: True`). The reasoning in the row quotes the ranks it was given: BTC distance rank 97.0, BTC drawdown rank 96.6, XRP drawdown rank 96.1, all at or above the alert rank of 95.
+
+TODO(you): add a screenshot of the Sheet row (with its sources) and of the email.
 
 ## Results and conclusion (Step 13)
 
-Each version was run three times on the same seven scenarios.
+Each version is to be run three times on the same seven scenarios with `python agent.py --measure` (also saved in `results.md`).
 
-TODO(you): paste the table printed by `python agent.py --measure` (it is also saved in `results.md`).
+**Measured so far:** the Agent loop version passed all 7 scenarios once (46 AI calls, 0 scenarios unfinished, 15 rate-limit waits) in the GitHub run on 2026-11-20 ([run 44736173365](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44736173365)). The other three versions have not been run with the real AI yet. The full measurement is about 1 million tokens, more than the 200,000 tokens per day of the free Groq tier.
+
+TODO(you): paste the full table once `--measure` has been run.
 
 | Version | Passes out of 7 (run 1, run 2, run 3) | Calls per run | Ever failed to finish? |
 |---|---|---|---|
-| Agent loop | | | |
-| Agent loop + reviewer | | | |
-| Planner | | | |
-| Planner + reviewer | | | |
+| Agent loop | 7/7 (one run only) | 46 | no |
+| Agent loop + reviewer | not run | | |
+| Planner | not run | | |
+| Planner + reviewer | not run | | |
 
 Conclusion: TODO(you). Which version runs daily, why, and what it costs in calls and waiting. An honest result such as "the reviewer did not help" is a good answer. Then set that version in `.github/workflows/daily.yml` and in `tests.yml`.
 

@@ -1,10 +1,13 @@
 /**
  * Crypto Watch Agent: Google Apps Script web app.
  *
- * Three actions, all sent as a POST with a JSON body to  <web app URL>?key=<KEY>
+ * Four actions, all sent as a POST with a JSON body to  <web app URL>?key=<KEY>
  *   history   returns the agent's own recent decisions from the Agent tab (the agent's memory)
  *   save      adds one row to the Agent tab and, when alert is true, sends an email
  *   report    emails the executive brief: a short HTML summary in the body and the full HTML page as an attachment
+ *   append    adds rows to one of three extra tabs: market_data (the Kraken numbers per coin), cross_asset
+ *             (correlation between coins) and scenarios (every scenario result). Only these three tab names are
+ *             accepted, so a request can never create or change any other tab.
  *
  * Deploy: Deploy > New deployment > Web app. Execute as: Me. Who has access: Anyone.
  * After EVERY change: Deploy > Manage deployments > edit > Version: New version > Deploy.
@@ -26,6 +29,17 @@ const MAX_SUMMARY_CHARS = 30000;
 const MAX_TEXT_CHARS = 1000;
 const MAX_HISTORY_ROWS = 20;
 const MIN_KEY_LENGTH = 16;
+const MAX_APPEND_ROWS = 60;
+// The extra tabs. The header row is written once, when the tab is created. Rows must have exactly this many cells.
+const EXTRA_TABS = {
+  market_data: ['Time (UTC)', 'Run ID', 'Version', 'Coin', 'As of (UTC day)', 'Last close (USD)', 'Daily return %',
+    'Volatility 30d (daily %)', 'Distance from 30d avg %', 'Max drawdown 30d %', 'Rank: volatility', 'Rank: distance',
+    'Rank: drawdown', 'Alert breaches', 'Trend', 'Change 30d %', 'Change 60d %', 'Volume vs 30d avg (x)', 'Rank: volume',
+    'Context flags', 'Relative strength vs group %', 'Rank: relative strength', 'History days', 'Status'],
+  cross_asset: ['Time (UTC)', 'Run ID', 'Version', 'As of (UTC day)', 'Pair', 'Correlation 30d', 'Rank', 'Flag'],
+  scenarios: ['Time (UTC)', 'Run ID', 'Version', 'No.', 'Scenario', 'Result', 'Expected', 'Alert', 'Coins', 'Message',
+    'Sources', 'Blocked reason', 'AI calls'],
+};
 
 function doGet() {
   return reply_({ success: false, error: 'POST_REQUIRED' });
@@ -52,6 +66,7 @@ function doPost(e) {
     if (request.action === 'history') return reply_(history_(request, props));
     if (request.action === 'save') return reply_(save_(request, props));
     if (request.action === 'report') return reply_(report_(request, props));
+    if (request.action === 'append') return reply_(append_(request, props));
     return reply_({ success: false, error: 'INVALID_ACTION' });
   } catch (err) {
     console.error('doPost failed: ' + (err && err.name ? err.name : 'Error'));   // never log the request or the key
@@ -154,6 +169,41 @@ function report_(request, props) {
     name: 'Crypto Watch Agent',
   });
   return { success: true, emailed: true };
+}
+
+// A cell: finite numbers stay numbers (so the Sheet can chart them), everything else is text. Text that starts with
+// = + - or @ gets a leading apostrophe, so it is never run as a formula.
+function cell_(value) {
+  if (typeof value === 'number' && isFinite(value)) return value;
+  if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
+  const text = clean_(value);
+  return /^[=+\-@]/.test(text) ? "'" + text : text;
+}
+
+// Rows for one of the extra tabs. Only the tab names in EXTRA_TABS are accepted.
+function append_(request, props) {
+  const headers = Object.prototype.hasOwnProperty.call(EXTRA_TABS, request.tab) ? EXTRA_TABS[request.tab] : null;
+  if (!headers || !Array.isArray(request.rows) || request.rows.length === 0 || request.rows.length > MAX_APPEND_ROWS) {
+    return { success: false, error: 'INVALID_PAYLOAD' };
+  }
+  const rows = [];
+  for (let i = 0; i < request.rows.length; i++) {
+    const row = request.rows[i];
+    if (!Array.isArray(row) || row.length !== headers.length) return { success: false, error: 'INVALID_PAYLOAD' };
+    rows.push(row.map(cell_));
+  }
+  const spreadsheet = SpreadsheetApp.openById(String(props.getProperty('SPREADSHEET_ID') || '').trim());
+  let sheet = spreadsheet.getSheetByName(request.tab);
+  if (!sheet) {
+    sheet = spreadsheet.insertSheet(request.tab);
+    sheet.appendRow(headers);
+    sheet.setFrozenRows(1);
+    sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
+  }
+  const first = sheet.getLastRow() + 1;
+  sheet.getRange(first, 1, rows.length, headers.length).setValues(rows);
+  SpreadsheetApp.flush();
+  return { success: true, added: rows.length, first_row: first };
 }
 
 // Run this ONCE from the editor (Run > authorizeOnce) to grant the Sheet and email permissions.

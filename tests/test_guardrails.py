@@ -18,7 +18,7 @@ import agent  # noqa: E402
 import scenarios  # noqa: E402
 
 TITLES = [section["title"] for section in agent.load_playbook()]
-GOOD_MARKET = [{"tool": "get_market_summary", "args": {"coin": "BTC"}, "result": {"coin": "BTC", "ranks": {}}}]
+GOOD_MARKET = [{"tool": "get_market_summary", "args": {"coin": "BTC"}, "result": {"coin": "BTC", "ranks": {}, "breaches": ["volatility"]}}]
 
 
 def draft(**changes):

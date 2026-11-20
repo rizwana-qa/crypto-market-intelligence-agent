@@ -29,7 +29,8 @@ import requests
 # ==============================================================================================
 QUESTION = (
     "Is BTC, ETH or XRP showing unusual volatility, distance from its 30-day average or drawdown "
-    "in its latest completed daily candle compared with its own history, and is the data reliable "
+    "in its latest completed daily candle compared with its own history, what do volume, relative "
+    "strength and the correlation between the coins add as context, and is the data reliable "
     "enough to say so?"
 )
 WATCHLIST = {"BTC": "XBTUSD", "ETH": "ETHUSD", "XRP": "XRPUSD"}  # Kraken calls Bitcoin "XBT"
@@ -40,13 +41,15 @@ RESULT_KEYS = {"XBTUSD": "XXBTZUSD", "ETHUSD": "XETHZUSD", "XRPUSD": "XXRPZUSD"}
 WINDOW = 30             # 30 daily returns need 31 closes (same window as Assignment 1)
 MIN_HISTORY_DAYS = 90   # fewer completed candles than this: the history is too short to rank against
 ALERT_RANK = 95.0       # a rank at or above this is "unusual" (see playbook.md, "Alert rules")
+UNUSUAL_LOW = 100.0 - ALERT_RANK  # two-sided context metrics: a rank at or below this (5) is unusually low
 
 DEFAULT_MODE = "agent"  # "agent" (tool loop) or "planner" (plan first, code runs the steps)
 USE_REVIEWER = False    # the reviewer switch; --reviewer on|off overrides it
 MAX_STEPS = 8           # agent loop: the most AI calls before the run stops with an error
 MAX_FIX_ATTEMPTS = 2    # how often the AI may be asked again after an invalid answer
 MAX_REVISIONS = 1       # how often the agent may revise after the reviewer found problems
-MAX_PLAN_STEPS = 8      # planner: the most steps a plan may have
+MAX_PLAN_STEPS = 10     # planner: the most steps a plan may have (3 market + cross-asset + history + playbook searches)
+TREND_LONG_DAYS = 60    # the longer of the two trend windows (the shorter one is WINDOW, 30 days)
 MAX_MESSAGE_CHARS = 280
 MAX_REASONING_CHARS = 600
 HISTORY_LIMIT = 7       # how many recent decisions the memory tool returns
@@ -102,7 +105,7 @@ def round_clean(value, digits):
 #    src/analysis.py). Plain arithmetic, no AI.
 # ==============================================================================================
 def parse_candles(raw, pair):
-    """Kraken candle rows are [time, open, high, low, close, vwap, volume, count]; only time and close are used."""
+    """Kraken candle rows are [time, open, high, low, close, vwap, volume, count]; time, close and volume are used."""
     candles = []
     for number, row in enumerate(raw):
         if not isinstance(row, list) or len(row) != 8:
@@ -116,7 +119,13 @@ def parse_candles(raw, pair):
             raise ValueError(f"{pair}: candle {number} has a close that is not a number")
         if not math.isfinite(close) or close <= 0:
             raise ValueError(f"{pair}: candle {number} has a close that is not a positive number")
-        candles.append({"timestamp": timestamp, "close": close})
+        try:
+            volume = float(row[6])
+        except (TypeError, ValueError):
+            raise ValueError(f"{pair}: candle {number} has a volume that is not a number")
+        if not math.isfinite(volume) or volume < 0:
+            raise ValueError(f"{pair}: candle {number} has a volume that is not zero or a positive number")
+        candles.append({"timestamp": timestamp, "close": close, "volume": volume})
     return candles
 
 
@@ -225,13 +234,150 @@ def summarize(coin, stamps, closes):
     })
 
 
+def load_coin(coin, now):
+    """(stamps, closes, volumes) of the completed days of one watchlist coin. Any problem is an error."""
+    candles = fetch_candles(WATCHLIST[coin])
+    stamps, closes = completed_closes(candles, now)
+    by_time = {c["timestamp"]: c for c in candles}
+    volumes = [by_time[t].get("volume") for t in stamps]
+    return stamps, closes, volumes
+
+
+# ---- context metrics: volume and trend. They describe; they never raise an alert on their own.
+def volume_ratio_series(volumes):
+    """Each day's volume divided by the mean volume of the 30 days before it (None until 30 earlier days exist)."""
+    ratios = [None] * len(volumes)
+    if any(v is None for v in volumes):
+        return ratios
+    for i in range(WINDOW, len(volumes)):
+        mean = statistics.fmean(volumes[i - WINDOW:i])
+        ratios[i] = volumes[i] / mean if mean > 0 else None
+    return ratios
+
+
+def trend_label(closes):
+    """'up' when the 30-day and 60-day changes are both positive and the close is above its 30-day average,
+    'down' for the mirror image, otherwise 'mixed'. A description of the past, not a forecast."""
+    ret30 = closes[-1] / closes[-1 - WINDOW] - 1
+    ret60 = closes[-1] / closes[-1 - TREND_LONG_DAYS] - 1
+    above = closes[-1] > statistics.fmean(closes[-WINDOW:])
+    if ret30 > 0 and ret60 > 0 and above:
+        return "up", ret30, ret60
+    if ret30 < 0 and ret60 < 0 and not above:
+        return "down", ret30, ret60
+    return "mixed", ret30, ret60
+
+
+def add_context(summary, closes, volumes):
+    """Adds the context block (trend, volume) and the context flags. The alert 'breaches' are not touched."""
+    label, ret30, ret60 = trend_label(closes)
+    context = {"trend": label, "ret_30d_pct": round_clean(ret30 * 100, 2), "ret_60d_pct": round_clean(ret60 * 100, 2)}
+    flags = []
+    ratios = volume_ratio_series(volumes)
+    history = [r for r in ratios if r is not None]
+    if ratios[-1] is not None and history:
+        rank = percentile_rank(history, ratios[-1])
+        context["volume_ratio_30d"] = round_clean(ratios[-1], 2)
+        context["volume_rank"] = round_clean(rank, 1)
+        if rank >= ALERT_RANK:
+            flags.append("volume")
+    summary["context"] = context
+    summary["flags"] = flags
+    return summary
+
+
 def tool_market_summary(coin):
-    pair = WATCHLIST[coin]
     try:
-        stamps, closes = completed_closes(fetch_candles(pair), datetime.now(timezone.utc))
-        return summarize(coin, stamps, closes)
+        stamps, closes, volumes = load_coin(coin, datetime.now(timezone.utc))
+        return add_context(summarize(coin, stamps, closes), closes, volumes)
     except (RuntimeError, ValueError, statistics.StatisticsError) as error:
         return {"coin": coin, "error": str(error)}
+
+
+# ---- cross-asset context: relative strength and correlation between the coins.
+def align_series(series_by_coin):
+    """{coin: (stamps, closes)} -> (common stamps, {coin: closes}) on the days every coin has."""
+    common = sorted(set.intersection(*(set(stamps) for stamps, _ in series_by_coin.values())))
+    if len(common) < MIN_HISTORY_DAYS:
+        raise ValueError(f"only {len(common)} days in common, need at least {MIN_HISTORY_DAYS}")
+    lookup = {coin: dict(zip(stamps, closes)) for coin, (stamps, closes) in series_by_coin.items()}
+    return common, {coin: [lookup[coin][t] for t in common] for coin in series_by_coin}
+
+
+
+def relative_strength_series(closes_by_coin):
+    """{coin: spread}: for each day, the coin's 30-day return minus the mean 30-day return of the coins (None early on)."""
+    n = len(next(iter(closes_by_coin.values())))
+    spreads = {coin: [None] * n for coin in closes_by_coin}
+    for i in range(WINDOW, n):
+        returns = {coin: closes[i] / closes[i - WINDOW] - 1 for coin, closes in closes_by_coin.items()}
+        mean = statistics.fmean(returns.values())
+        for coin, value in returns.items():
+            spreads[coin][i] = value - mean
+    return spreads
+
+
+def correlation_series(closes_a, closes_b):
+    """Rolling correlation of the last 30 daily returns of two coins (None early on, or when a window is flat)."""
+    n = len(closes_a)
+    ra = [b / a - 1 for a, b in zip(closes_a, closes_a[1:])]
+    rb = [b / a - 1 for a, b in zip(closes_b, closes_b[1:])]
+    out = [None] * n
+    for i in range(WINDOW, n):
+        try:
+            out[i] = statistics.correlation(ra[i - WINDOW:i], rb[i - WINDOW:i])
+        except statistics.StatisticsError:
+            out[i] = None
+    return out
+
+
+def cross_asset_summary(series_by_coin):
+    """Relative strength and correlation for the coins that have data. Plain arithmetic, no AI."""
+    stamps, closes_by_coin = align_series(series_by_coin)
+    coins = list(closes_by_coin)
+    spreads = relative_strength_series(closes_by_coin)
+    strength, flags = [], []
+    for coin in coins:
+        history = [v for v in spreads[coin] if v is not None]
+        rank = percentile_rank(history, history[-1])
+        closes = closes_by_coin[coin]
+        strength.append({"coin": coin, "ret_30d_pct": round_clean((closes[-1] / closes[-1 - WINDOW] - 1) * 100, 2),
+                         "vs_group_pct": round_clean(history[-1] * 100, 2), "rank": round_clean(rank, 1)})
+        if rank >= ALERT_RANK or rank <= UNUSUAL_LOW:
+            flags.append(f"relative strength {coin}")
+    correlations = []
+    for a_index, a in enumerate(coins):
+        for b in coins[a_index + 1:]:
+            series = correlation_series(closes_by_coin[a], closes_by_coin[b])
+            history = [v for v in series if v is not None]
+            if not history or series[-1] is None:
+                continue
+            rank = percentile_rank(history, series[-1])
+            correlations.append({"pair": f"{a}-{b}", "corr_30d": round_clean(series[-1], 2), "rank": round_clean(rank, 1)})
+            if rank >= ALERT_RANK or rank <= UNUSUAL_LOW:
+                flags.append(f"correlation {a}-{b}")
+    return {"as_of": format_date(stamps[-1]), "history_days": len(stamps), "coins": coins,
+            "relative_strength": strength, "correlations": correlations, "flags": flags}
+
+
+def tool_cross_asset_summary():
+    now = datetime.now(timezone.utc)
+    series, unavailable = {}, {}
+    for coin in WATCHLIST:
+        try:
+            stamps, closes, _ = load_coin(coin, now)
+            series[coin] = (stamps, closes)
+        except (RuntimeError, ValueError) as error:
+            unavailable[coin] = str(error)
+    if len(series) < 2:
+        return {"error": f"at least two coins with valid data are needed; unavailable: {unavailable}"}
+    try:
+        result = cross_asset_summary(series)
+    except (ValueError, statistics.StatisticsError) as error:
+        return {"error": str(error)}
+    if unavailable:
+        result["unavailable"] = unavailable
+    return result
 
 
 # ==============================================================================================
@@ -302,6 +448,69 @@ def deliver(decision, version):
     log(f"Delivered: row {body.get('row')}, email sent: {body.get('emailed')}")
 
 
+def sheet_append(tab, rows):
+    """Adds rows to one of the extra tabs. A problem here is a warning and never fails the run."""
+    try:
+        body = sheet_post({"action": "append", "tab": tab, "rows": rows})
+    except AgentError as error:
+        log(f"::warning::the {tab} tab was not updated: {error}. The deployed web app may be an older Code.gs.")
+        return False
+    log(f"[sheet] {tab}: {body.get('added')} row(s) added")
+    return True
+
+
+def last_result(evidence, tool, coin=None):
+    """The most recent result of a tool (for one coin) in the evidence, or None."""
+    for item in reversed(evidence):
+        if item["tool"] == tool and (coin is None or item["args"].get("coin") == coin):
+            return item["result"]
+    return None
+
+
+def market_rows(evidence, version, stamp, run_id):
+    """One row per coin the agent looked at: the numbers fetched from Kraken and how they were ranked."""
+    cross = last_result(evidence, "get_cross_asset_summary")
+    strength = {x["coin"]: x for x in cross.get("relative_strength", [])} if isinstance(cross, dict) else {}
+    rows = []
+    for coin in WATCHLIST:
+        s = last_result(evidence, "get_market_summary", coin)
+        if s is None:
+            continue
+        if "error" in s:
+            rows.append([stamp, run_id, version, coin, "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
+                         "ERROR: " + str(s["error"])[:200]])
+            continue
+        c, r, rs = s.get("context", {}), s["ranks"], strength.get(coin, {})
+        rows.append([stamp, run_id, version, coin, s["as_of"], s["last_close"], s["daily_return_pct"],
+                     s["volatility_30d_daily_pct"], s["dist_from_30d_avg_pct"], s["max_drawdown_30d_pct"],
+                     r["volatility"], r["distance"], r["drawdown"], ", ".join(s["breaches"]),
+                     c.get("trend", ""), c.get("ret_30d_pct", ""), c.get("ret_60d_pct", ""),
+                     c.get("volume_ratio_30d", ""), c.get("volume_rank", ""), ", ".join(s.get("flags", [])),
+                     rs.get("vs_group_pct", ""), rs.get("rank", ""), s["history_days"], "ok"])
+    return rows
+
+
+def cross_rows(evidence, version, stamp, run_id):
+    cross = last_result(evidence, "get_cross_asset_summary")
+    if not isinstance(cross, dict) or "error" in cross:
+        return []
+    flagged = set(cross.get("flags", []))
+    return [[stamp, run_id, version, cross["as_of"], x["pair"], x["corr_30d"], x["rank"],
+             "unusual" if f"correlation {x['pair']}" in flagged else ""] for x in cross.get("correlations", [])]
+
+
+def publish_market_data(evidence, version):
+    """The extra tabs show what the agent saw: the Kraken numbers per coin and the relationships between coins."""
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    run_id = os.environ.get("GITHUB_RUN_ID", "local")
+    rows = market_rows(evidence, version, stamp, run_id)
+    if rows:
+        sheet_append("market_data", rows)
+    rows = cross_rows(evidence, version, stamp, run_id)
+    if rows:
+        sheet_append("cross_asset", rows)
+
+
 # ==============================================================================================
 # 4. PLAYBOOK TOOL: search playbook.md (RAG). Matches words, not meaning.
 # ==============================================================================================
@@ -355,10 +564,22 @@ TOOL_SPECS = {
         "description": (
             "Live Kraken daily data for ONE watchlist coin: last close, percent distance from its 30-day "
             "average, 30-day daily volatility and 30-day maximum drawdown, each ranked 0-100 against that "
-            "coin's own history, plus 'breaches' (the ranks at or above the alert rank). "
-            "Returns an error object when the data is unavailable."
+            "coin's own history, plus 'breaches' (the ranks at or above the alert rank). The 'context' block "
+            "adds the trend (up, down or mixed), the 30 and 60-day changes, today's volume as a multiple of "
+            "its 30-day average (volume_ratio_30d) and that volume's rank; 'flags' lists context that is "
+            "unusual (rank 95 or higher). Returns an error object when the data is unavailable."
         ),
         "params": {"coin": {"type": "string", "enum": list(WATCHLIST)}},
+    },
+    "get_cross_asset_summary": {
+        "description": (
+            "How the watchlist coins relate to each other, from Kraken daily data: each coin's 30-day return "
+            "against the group (relative strength) and the 30-day correlation of daily returns for each pair "
+            "(BTC-ETH, BTC-XRP, ETH-XRP), each ranked 0-100 against its own history (near 100 unusually "
+            "high, near 0 unusually low), plus 'flags' for ranks at or above 95 or at or below 5. "
+            "Context only: it never raises an alert. Returns an error object when the data is unavailable."
+        ),
+        "params": {},
     },
     "get_recent_decisions": {
         "description": (
@@ -377,6 +598,7 @@ TOOL_SPECS = {
 }
 TOOLS = {
     "get_market_summary": tool_market_summary,
+    "get_cross_asset_summary": tool_cross_asset_summary,
     "get_recent_decisions": tool_recent_decisions,
     "search_playbook": tool_search_playbook,
 }
@@ -455,10 +677,10 @@ INTRO = ("You are a crypto market watch agent. This is for education only.\n"
 
 SYSTEM_PROMPT = INTRO + """
 How to work:
-1. Call get_market_summary for every watchlist coin.
+1. Call get_market_summary for every watchlist coin, and get_cross_asset_summary once.
 2. Call get_recent_decisions to see your own recent alerts.
 3. Call search_playbook for the rules that apply (alert rules, repeat alerts, wording rules, and the rule for each metric that looks unusual).
-4. Then give the final answer.
+4. Then give the final answer. Volume, relative strength and correlation are context: describe them, they never raise an alert alone.
 
 """ + RULES + "\n\n" + FORMAT
 
@@ -467,7 +689,7 @@ DECIDE_PROMPT = INTRO + "\nYou are given the evidence: everything the tools retu
 PLAN_PROMPT = INTRO + """
 Write the plan for today's work as ONLY a JSON object:
 {"steps": [{"tool": "...", "args": {...}, "reason": "..."}]}
-Rules: at most %d steps; use only the tools below; every coin must be one of the watchlist. The plan must gather market data for every watchlist coin, your recent decisions, and the playbook rules you will need (alert rules, repeat alerts, wording rules, and the rule for each metric).
+Rules: at most %d steps; use only the tools below; every coin must be one of the watchlist. The plan must contain one get_market_summary step for every watchlist coin, one get_cross_asset_summary step, one get_recent_decisions step, and playbook searches for the rules you will need: alert rules, repeat alerts, wording rules, and the rule for each metric. Plan the steps in a way that leaves room for all of them: one search query may name several rules, for example "alert rules repeat alerts wording".
 Tools:
 %s"""
 
@@ -760,6 +982,12 @@ def apply_guardrails(draft, valid_titles, evidence):
             reason = "advice language in the message"
         elif not any(e["tool"] == "get_market_summary" and "error" not in e["result"] for e in evidence):
             reason = "no valid market data in this run"
+        else:
+            breached = {e["result"].get("coin") for e in evidence
+                        if e["tool"] == "get_market_summary" and "error" not in e["result"] and e["result"].get("breaches")}
+            without = [coin for coin in draft["coins"] if coin not in breached]
+            if without:
+                reason = f"{', '.join(without)}: no price rank at or above the alert rank in the market data (context never alerts alone)"
     if reason:
         log(f"GUARDRAIL blocked the alert: {reason}")
         final.update(alert=False, coins=[], message="", blocked_reason=reason)
@@ -784,12 +1012,13 @@ def decide(mode, use_reviewer, tools):
 def run_live(mode, use_reviewer, dry_run):
     version = version_name(mode, use_reviewer)
     log(f"Version: {version} | model: {MODEL} | watchlist: {', '.join(WATCHLIST)}")
-    decision, _ = decide(mode, use_reviewer, TOOLS)
+    decision, evidence = decide(mode, use_reviewer, TOOLS)
     log("Decision: " + json.dumps(decision))
     if dry_run:
         log("Dry run: nothing was posted to the Sheet")
     else:
         deliver(decision, version)
+        publish_market_data(evidence, version)
     log(f"Run finished: alert={decision['alert']} llm_calls={STATS['llm_calls']}")
     return 0
 
@@ -800,6 +1029,8 @@ def main(argv=None):
     parser.add_argument("--reviewer", choices=["on", "off"], default="on" if USE_REVIEWER else "off")
     parser.add_argument("--dry-run", action="store_true", help="do not post to the Sheet")
     parser.add_argument("--test", action="store_true", help="run the scenarios on fake tools")
+    parser.add_argument("--only", default="", help="with --test: run only these scenarios, for example 8-16 or 1,3,5")
+    parser.add_argument("--publish", action="store_true", help="with --test: also write every scenario result to the scenarios tab")
     parser.add_argument("--measure", action="store_true", help="run all 4 versions several times")
     parser.add_argument("--runs", type=int, default=3, help="runs per version for --measure")
     args = parser.parse_args(argv)
@@ -810,7 +1041,7 @@ def main(argv=None):
             return scenarios.measure(args.runs)
         if args.test:
             import scenarios
-            return scenarios.run_all(args.mode, use_reviewer)["exit_code"]
+            return scenarios.run_all(args.mode, use_reviewer, scenarios.parse_only(args.only), args.publish)["exit_code"]
         return run_live(args.mode, use_reviewer, args.dry_run)
     except AgentError as error:
         print(f"ERROR: {error}", file=sys.stderr)

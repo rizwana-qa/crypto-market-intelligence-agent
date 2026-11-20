@@ -41,9 +41,79 @@ MONITORING_QUESTION = (
 # ------------------------------------------------------------------------------------------------
 # 1. Data
 # ------------------------------------------------------------------------------------------------
-def analyse(coin, stamps, closes):
+def value_at_rank(values, rank):
+    """The smallest value in `values` whose own percentile rank is at least `rank` (None for an empty list)."""
+    for value in sorted(set(values)):
+        if agent.percentile_rank(values, value) >= rank:
+            return value
+    return None
+
+
+def _volatility_level(window_returns, target, direction, last_close):
+    """The next-day close that pushes the 30-day volatility to `target`, found by bisection (None if even a 50% move cannot)."""
+    def spread(r):
+        return agent.statistics.stdev(window_returns + [r])
+    start = agent.statistics.fmean(window_returns)
+    if spread(start) >= target:
+        return "already"
+    edge = 0.5 * direction
+    if spread(edge) < target:
+        return None
+    low, high = start, edge
+    for _ in range(60):
+        middle = (low + high) / 2
+        low, high = (middle, high) if spread(middle) < target else (low, middle)
+    return last_close * (1 + high)
+
+
+def trigger_levels(closes):
+    """The next-day closes at which each metric would reach the alert rank, from the coin's own history.
+    These are conditions to monitor. They are not forecasts and not price targets."""
+    series, returns = agent.metric_series(closes)
+    last = closes[-1]
+    k = agent.WINDOW - 1
+    levels = {"history_days": len(closes), "distance": None, "drawdown": None, "volatility": None}
+    # A flat history has no top 5 percent, so there is no level to give (value_at_rank returns None).
+    d = value_at_rank([abs(v) for v in series["distance"] if v is not None], agent.ALERT_RANK)
+    if d is not None:
+        total = sum(closes[-k:])
+        levels["distance"] = {"value_pct": d * 100, "up": (1 + d) * total / (k - d), "down": (1 - d) * total / (k + d)}
+    depth = value_at_rank([v for v in series["drawdown"] if v is not None], agent.ALERT_RANK)
+    if depth is not None:
+        window = closes[-agent.WINDOW:]
+        already = -agent.max_drawdown(window) >= depth
+        levels["drawdown"] = {"value_pct": depth * 100, "down": "already" if already else max(window) * (1 - depth)}
+    vol = value_at_rank([v for v in series["volatility"] if v is not None], agent.ALERT_RANK)
+    if vol is not None:
+        recent = returns[-k:]
+        levels["volatility"] = {"value_pct": vol * 100, "up": _volatility_level(recent, vol, 1, last),
+                                "down": _volatility_level(recent, vol, -1, last)}
+    return levels
+
+
+def episodes(flags):
+    """How many separate runs of True a list has: three days in a row at the alert rank are one episode."""
+    return sum(1 for i, flag in enumerate(flags) if flag and (i == 0 or not flags[i - 1]))
+
+
+def base_rate(stamps, closes):
+    """How often the coin was at the alert rank on any of the three price metrics, each day ranked only against the days before it.
+    The first days are skipped until the history is as long as the agent needs (MIN_HISTORY_DAYS), so every day counted could have raised an alert."""
+    series, _ = agent.metric_series(closes)
+    first = agent.WINDOW + agent.MIN_HISTORY_DAYS - 1
+    days, flags = [], []
+    for i in range(first, len(closes)):
+        ranks = agent.ranks_at(series, i)
+        days.append(agent.format_date(stamps[i]))
+        flags.append(max(ranks.values()) >= agent.ALERT_RANK)
+    return {"days": days, "flags": flags, "ranked_days": len(flags), "alert_days": sum(flags), "episodes": episodes(flags)}
+
+
+def analyse(coin, stamps, closes, volumes=None):
     """The agent's own summary plus the series the charts need."""
     summary = agent.summarize(coin, stamps, closes)
+    if volumes is not None:
+        agent.add_context(summary, closes, volumes)
     series, _ = agent.metric_series(closes)
     n = len(closes)
     start = max(0, n - CHART_DAYS)
@@ -56,22 +126,35 @@ def analyse(coin, stamps, closes):
     return {
         "coin": coin,
         "summary": summary,
+        "base_rate": base_rate(stamps, closes),
         "dates": [agent.format_date(t) for t in stamps[start:]],
         "indexed": [round(c / base * 100, 2) for c in closes[start:]],
         "rank_dates": rank_dates,
         "rank_top": rank_top,
+        "levels": trigger_levels(closes),
     }
 
 
+def cross_from(series):
+    """Relationships between the coins that have data, or an error note."""
+    if len(series) < 2:
+        return {"error": "at least two coins with data are needed for relative strength and correlation"}
+    try:
+        return agent.cross_asset_summary(series)
+    except (ValueError, agent.statistics.StatisticsError) as error:
+        return {"error": str(error)}
+
+
 def gather(now):
-    coins = []
-    for coin, pair in agent.WATCHLIST.items():
+    coins, series = [], {}
+    for coin in agent.WATCHLIST:
         try:
-            stamps, closes = agent.completed_closes(agent.fetch_candles(pair), now)
-            coins.append(analyse(coin, stamps, closes))
+            stamps, closes, volumes = agent.load_coin(coin, now)
+            coins.append(analyse(coin, stamps, closes, volumes))
+            series[coin] = (stamps, closes)
         except (RuntimeError, ValueError, agent.statistics.StatisticsError) as error:
             coins.append({"coin": coin, "error": str(error)})
-    return coins
+    return coins, cross_from(series)
 
 
 def fetch_decisions():
@@ -82,21 +165,30 @@ def fetch_decisions():
     return body.get("decisions", []), ""
 
 
-def demo_coins():
-    """Synthetic closes, only to preview the layout. The page says so in its banner."""
+def demo_series():
+    """Synthetic closes and volumes, only to preview the layout. The page says so in its banner."""
     now = datetime(2026, 11, 20, 12, 0, tzinfo=timezone.utc)
     today = int(now.timestamp()) // agent.SECONDS_PER_DAY * agent.SECONDS_PER_DAY
-    coins = []
+    out = {}
     for index, (coin, start_price) in enumerate((("BTC", 90000.0), ("ETH", 3100.0), ("XRP", 2.4))):
         n = 400
         stamps = [today - (n - i) * agent.SECONDS_PER_DAY for i in range(n)]
-        closes = []
+        closes, volumes = [], []
         for i in range(n):
             wave = math.sin(i / (9 + 3 * index)) * 0.012 + math.sin(i / 3.1 + index) * 0.006
             drop = -0.0035 * max(0, i - (n - 14)) if coin in ("BTC", "XRP") else 0.0
             closes.append(start_price * (1 + 0.0004 * i + wave + drop))
-        coins.append(analyse(coin, stamps, closes))
-    return coins
+            volumes.append(1000.0 * (1 + 0.3 * math.sin(i / 5.0 + index)) * (2.2 if i >= n - 2 and coin == "BTC" else 1.0))
+        out[coin] = (stamps, closes, volumes)
+    return out
+
+
+def demo_coins():
+    return [analyse(coin, stamps, closes, volumes) for coin, (stamps, closes, volumes) in demo_series().items()]
+
+
+def demo_cross():
+    return cross_from({coin: (stamps, closes) for coin, (stamps, closes, _) in demo_series().items()})
 
 
 def demo_decisions():
@@ -156,6 +248,14 @@ def headlines(data):
         lines.append(f"No coin reached the alert rank of {agent.ALERT_RANK:g} on volatility, distance from the 30-day average or drawdown.")
     for coin, metric, rank in near_threshold(data):
         lines.append(f"{coin} is near the threshold on {LABELS[metric].lower()} (rank {rank}, alert rank {agent.ALERT_RANK:g}).")
+    for c in good(data):
+        ctx = c["summary"].get("context", {})
+        if "volume" in c["summary"].get("flags", []):
+            lines.append(f"{c['coin']} volume is unusual: {ctx['volume_ratio_30d']:.2f} times its 30-day average (rank {ctx['volume_rank']}). "
+                         "Volume is context and never raises an alert on its own.")
+    cross = data.get("cross") or {}
+    if cross.get("flags"):
+        lines.append("Unusual relationships, context only: " + "; ".join(cross["flags"]) + " (each at an extreme of its own history, see the relationships table).")
     broken = [c for c in data["coins"] if "error" in c]
     if broken:
         lines.append("Data unavailable, so no statement is made for: " + ", ".join(c["coin"] for c in broken) + ".")
@@ -166,9 +266,10 @@ def headlines(data):
 
 def triggers(data):
     lines = []
-    for c in breaching(data):
-        names = ", ".join(LABELS[m].lower() for m in c["summary"]["breaches"])
-        lines.append(f"{c['coin']}: a spike stays inside the 30-day window for 30 days, so ranks for {names} can stay high for days. "
+    breached = breaching(data)
+    if breached:
+        who = "; ".join(f"{c['coin']} ({', '.join(LABELS[m].lower() for m in c['summary']['breaches'])})" for c in breached)
+        lines.append(f"{who}: a spike stays inside the 30-day window for 30 days, so these ranks can stay high for days. "
                      f"The agent does not repeat an alert for a coin that is in its last {agent.HISTORY_LIMIT} decisions.")
     for coin, metric, rank in near_threshold(data):
         lines.append(f"{coin}: {LABELS[metric].lower()} is {agent.ALERT_RANK - rank:.1f} rank points below the alert rank of {agent.ALERT_RANK:g}.")
@@ -227,24 +328,44 @@ def threshold_lines(y_value, color, label=None, dash="dash"):
     return shape, note
 
 
+HEAT_COLUMNS = [("Volatility", "volatility"), ("Vs 30-day<br>average", "distance"), ("Max<br>drawdown", "drawdown"),
+                ("Volume<br>(context)", "volume"), ("Relative<br>strength<br>(context)", "strength")]
+
+
+def rank_heatmap(data, ok):
+    """Coins by measures. The colour shows how extreme the rank is: grey is ordinary, amber is 90 up to 95, red is 95 or higher.
+    Relative strength can be unusual at either end, so its colour uses the distance from the middle and its text is the rank."""
+    strength = {x["coin"]: x["rank"] for x in (data.get("cross") or {}).get("relative_strength", [])}
+    z, text = [], []
+    for c in ok:
+        s, ctx = c["summary"], c["summary"].get("context", {})
+        values = [s["ranks"]["volatility"], s["ranks"]["distance"], s["ranks"]["drawdown"], ctx.get("volume_rank"), strength.get(c["coin"])]
+        text.append(["n/a" if v is None else f"{v:.1f}" for v in values])
+        z.append([None if v is None else (max(v, 100.0 - v) if i == 4 else v) for i, v in enumerate(values)])
+    scale = [[0, "#f1f5f9"], [0.89, "#e2e8f0"], [0.9, "#fde68a"], [0.949, "#fcd34d"], [0.95, "#f87171"], [1, "#dc2626"]]
+    spec = {"type": "heatmap", "x": [name for name, _ in HEAT_COLUMNS], "y": [c["coin"] for c in ok], "z": z, "text": text,
+            "texttemplate": "%{text}", "textfont": {"size": 15}, "zmin": 50, "zmax": 100, "colorscale": scale, "showscale": False, "xgap": 4, "ygap": 4,
+            "hovertemplate": "%{y}, %{x}: rank %{text}<extra></extra>"}
+    line = {"type": "line", "xref": "x", "yref": "paper", "x0": 2.5, "x1": 2.5, "y0": 0, "y1": 1, "line": {"color": "#0f172a", "width": 1.5, "dash": "dot"}}
+    notes = [{"x": 1, "y": 1.12, "xref": "x", "yref": "paper", "text": "Can raise an alert", "showarrow": False, "font": {"size": 12, "color": "#991b1b"}},
+             {"x": 3.5, "y": 1.12, "xref": "x", "yref": "paper", "text": "Context only", "showarrow": False, "font": {"size": 12, "color": "#475569"}}]
+    return {"data": [spec], "layout": layout(hovermode="closest", yaxis={"autorange": "reversed"}, xaxis={"side": "bottom", "tickfont": {"size": 11}, "tickangle": 0},
+                                             shapes=[line], annotations=notes, margin={"l": 50, "r": 10, "t": 40, "b": 70})}
+
+
 def charts(data):
     ok = good(data)
     if not ok:
         return {}
     price = [{"type": "scatter", "mode": "lines", "name": c["coin"], "x": c["dates"], "y": c["indexed"],
               "line": {"color": COLORS.get(c["coin"], "#64748b"), "width": 2.5}} for c in ok]
-    metric_names = [LABELS[m] for m in agent.METRICS]
-    ranks = [{"type": "bar", "name": c["coin"], "x": metric_names, "y": [c["summary"]["ranks"][m] for m in agent.METRICS],
-              "marker": {"color": COLORS.get(c["coin"], "#64748b")}} for c in ok]
+    ranks = rank_heatmap(data, ok)
     alert_shape, alert_note = threshold_lines(agent.ALERT_RANK, "#dc2626", f"Alert rank {agent.ALERT_RANK:g}")
-    near_shape, near_note = threshold_lines(NEAR_RANK, "#d97706", f"Near threshold {NEAR_RANK:g}", dash="dot")
     history = [{"type": "scatter", "mode": "lines", "name": c["coin"], "x": c["rank_dates"], "y": c["rank_top"],
                 "line": {"color": COLORS.get(c["coin"], "#64748b"), "width": 2.5}} for c in ok]
     return {
         "price": {"data": price, "layout": layout(yaxis={"title": {"text": "Index, 90 days ago = 100"}})},
-        "ranks": {"data": ranks, "layout": layout(
-            barmode="group", hovermode="closest", yaxis={"range": [0, 105], "title": {"text": "Rank against own history"}},
-            shapes=[alert_shape, near_shape], annotations=[alert_note, near_note])},
+        "ranks": ranks,
         "history": {"data": history, "layout": layout(
             yaxis={"range": [0, 105], "title": {"text": "Highest of the 3 ranks"}},
             shapes=[alert_shape], annotations=[alert_note])},
@@ -293,6 +414,7 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 .ai blockquote{margin:10px 0;padding:12px 16px;background:#f5f3ff;border-radius:10px;font-size:16px}
 .facts{display:flex;flex-wrap:wrap;gap:8px 22px;font-size:13px;color:var(--muted);margin:8px 0}
 .q{margin:6px 0 12px;padding:14px 18px;border-left:6px solid var(--teal);background:#f0fdfa;border-radius:10px;font-size:17px;font-weight:600}
+.muted{color:var(--muted);font-size:12px}
 .legend{display:flex;flex-wrap:wrap;gap:10px 20px;font-size:13px;color:var(--muted)}
 footer{font-size:12px;color:var(--muted);padding:6px 4px 30px}
 @media(max-width:640px){h1{font-size:24px}.grid2{grid-template-columns:1fr}}
@@ -350,7 +472,8 @@ def question_section():
         '<section class="card"><h2>The question this agent answers</h2>'
         f'<blockquote class="q">{esc(MONITORING_QUESTION)}</blockquote>'
         '<p class="sub"><b>What the agent answers each day today:</b> ' + esc(agent.QUESTION) + ' '
-        'Volume, relative strength, cross-asset relationships and forward scenarios are not part of the agent yet. The agent makes no forecast, by design.</p>'
+        'Trend, volume, relative strength and the correlation between coins are context: the agent describes them and they never raise an alert on their own. '
+        'Forward scenarios are shown below as conditions to monitor, not predictions. The agent makes no forecast, by design.</p>'
         f'<div class="facts"><span>Watchlist: {coins} (USD pairs)</span><span>Data: Kraken daily candles, latest completed UTC day</span>'
         f'<span>Cadence: once a day, 05:17 UTC</span><span>Output: one Sheet row, and an email when there is an alert</span></div></section>')
 
@@ -367,6 +490,9 @@ def scenario_rows():
          "No alert for that coin. The agent says the data was unavailable and never estimates a number."),
         ("Instructions in the data", "Text in the data, such as forum chatter, pushes the agent to give trading instructions.", "Blocked by code. Alerts only describe numbers and never tell anyone what to do."),
         ("One coin down", "One coin has a data problem while the others are calm.", "No alert. The failure is reported, and the other coins are still assessed."),
+        ("Context without a price move", "Volume, relative strength or a correlation is unusual, but no price rank is at the alert rank.",
+         "No alert. The context is described in the brief and never raises an alert on its own."),
+        ("Several coins at once", "Two or more coins reach the alert rank on the same day.", "One brief alert that names every coin involved. A coin that is not at the alert rank is never named."),
     ]
 
 
@@ -419,6 +545,123 @@ def decision_table(data):
     return ('<table><tr><th>Time (UTC)</th><th>Result</th><th>Coins</th><th>Message</th><th>Sources</th></tr>' + "".join(rows) + "</table>")
 
 
+def rank_cell_two_sided(rank):
+    cls = "hi" if rank >= agent.ALERT_RANK or rank <= agent.UNUSUAL_LOW else "mid" if rank >= NEAR_RANK or rank <= 100 - NEAR_RANK else "lo"
+    return f'<span class="rank {cls}">{rank:.1f}</span>'
+
+
+def context_section(data):
+    cross = data.get("cross") or {}
+    strength = {x["coin"]: x for x in cross.get("relative_strength", [])}
+    rows = []
+    for c in good(data):
+        ctx = c["summary"].get("context")
+        if not ctx:
+            continue
+        volume = (f'{ctx["volume_ratio_30d"]:.2f}x {rank_cell(ctx["volume_rank"])}' if "volume_rank" in ctx else "n/a")
+        rs = strength.get(c["coin"])
+        rs_text = (f'{rs["vs_group_pct"]:+.2f} pts {rank_cell_two_sided(rs["rank"])}' if rs else "n/a")
+        rows.append(f'<tr><td><b>{esc(c["coin"])}</b></td><td>{esc(ctx["trend"])}</td>'
+                    f'<td class="num">{ctx["ret_30d_pct"]:+.2f}% / {ctx["ret_60d_pct"]:+.2f}%</td>'
+                    f'<td class="num">{volume}</td><td class="num">{rs_text}</td></tr>')
+    if not rows:
+        return ""
+    table = ('<table><tr><th>Coin</th><th>Trend</th><th class="num">Change 30d / 60d</th><th class="num">Volume vs 30-day average (rank)</th>'
+             '<th class="num">Relative strength vs group (rank)</th></tr>' + "".join(rows) + "</table>")
+    pairs = ""
+    if cross.get("correlations"):
+        flagged = set(cross.get("flags", []))
+        body = "".join(f'<tr><td><b>{esc(x["pair"])}</b></td><td class="num">{x["corr_30d"]:+.2f}</td><td class="num">{rank_cell_two_sided(x["rank"])}</td>'
+                       f'<td>{"unusual" if "correlation " + x["pair"] in flagged else "within its normal range"}</td></tr>' for x in cross["correlations"])
+        pairs = ('<p class="sub" style="margin-top:14px"><b>How the coins move together</b> (correlation of the last 30 daily returns, ranked against the pair\'s own history; '
+                 'near 100 is unusually tight, near 0 unusually loose).</p>'
+                 f'<table><tr><th>Pair</th><th class="num">Correlation</th><th class="num">Rank</th><th>Reading</th></tr>{body}</table>')
+    elif cross.get("error"):
+        pairs = f'<p class="sub">Relationships unavailable: {esc(cross["error"])}.</p>'
+    return ('<section class="card"><h2>Context: trend, volume and relationships<span class="chip code">COMPUTED BY CODE</span></h2>'
+            '<p class="sub">These describe the past and never raise an alert on their own. Volume is the coin\'s traded volume on Kraken, not market-wide volume. '
+            f'Relative strength is a coin\'s 30-day return minus the group average.</p>{table}{pairs}</section>')
+
+
+def _price(value):
+    return f"${value:,.2f}" if value >= 100 else f"${value:,.4f}"
+
+
+def _level_cell(level, last, side="above"):
+    if level == "already":
+        return "already at the alert rank"
+    if level is None:
+        return "not reachable"
+    text = f"{_price(level)} ({(level / last - 1) * 100:+.1f}%)"
+    if (side == "above" and last >= level) or (side == "below" and last <= level):
+        text += ", already beyond"
+    return text
+
+
+def base_rate_section(data):
+    ok = [c for c in good(data) if c.get("base_rate") and c["base_rate"]["ranked_days"]]
+    if not ok:
+        return ""
+    rows, union = [], {}
+    for c in ok:
+        b = c["base_rate"]
+        for day, flag in zip(b["days"], b["flags"]):
+            union[day] = union.get(day, False) or flag
+        last = next((d for d, f in zip(reversed(b["days"]), reversed(b["flags"])) if f), None)
+        rows.append(f'<tr><td><b>{esc(c["coin"])}</b></td><td class="num">{b["ranked_days"]}</td><td class="num">{b["alert_days"]}</td>'
+                    f'<td class="num">{100.0 * b["alert_days"] / b["ranked_days"]:.1f}%</td><td class="num">{b["episodes"]}</td><td>{esc(last or "never")}</td></tr>')
+    flags = [union[d] for d in sorted(union)]
+    rows.append(f'<tr><td><b>Any coin</b></td><td class="num">{len(flags)}</td><td class="num">{sum(flags)}</td>'
+                f'<td class="num">{100.0 * sum(flags) / len(flags):.1f}%</td><td class="num">{episodes(flags)}</td><td></td></tr>')
+    return ('<section class="card"><h2>How often the alert rank is reached<span class="chip code">COMPUTED BY CODE</span></h2>'
+            f'<p class="sub">The same rule run over each coin\'s own history: a day counts when volatility, distance from the 30-day average or drawdown ranks at {agent.ALERT_RANK:g} or higher. '
+            'Each day is ranked only against the days before it, so no future data leaks in. Three days in a row are one episode.</p>'
+            '<table><tr><th>Coin</th><th class="num">Days ranked</th><th class="num">Days at the alert rank</th><th class="num">Share of days</th>'
+            '<th class="num">Separate episodes</th><th>Latest day at the alert rank</th></tr>' + "".join(rows) + '</table>'
+            '<p class="sub" style="margin-top:12px"><b>How to read it.</b> A top-5% rule reaches the alert rank on about 5% of days for each metric by construction. '
+            'The three metrics move together and a spike stays in the 30-day window, so days cluster into episodes. Because three coins are watched, an alert for some coin is more common than an alert for one coin. '
+            'These are in-sample counts on past data and say nothing about what comes next.</p></section>')
+
+
+def watch_section(data):
+    rows = []
+    columns = [("distance", "up", "above"), ("distance", "down", "below"), ("volatility", "up", "above"), ("volatility", "down", "below"), ("drawdown", "down", "below")]
+    for c in good(data):
+        lv = c.get("levels")
+        if not lv:
+            continue
+        last = c["summary"]["last_close"]
+        cells = []
+        for metric, key, side in columns:
+            level = lv[metric][key] if lv.get(metric) and key in lv[metric] else "none"
+            cells.append("n/a" if level == "none" else _level_cell(level, last, side))
+        rows.append(f'<tr><td><b>{esc(c["coin"])}</b><br><span class="muted">last {_price(last)}</span></td>'
+                    + "".join(f'<td class="num">{esc(x)}</td>' for x in cells) + "</tr>")
+    if not rows:
+        return ""
+    levels = ('<table><tr><th>Coin</th><th class="num">Distance: close above</th><th class="num">Distance: close below</th>'
+              '<th class="num">Volatility: close above</th><th class="num">Volatility: close below</th><th class="num">Drawdown: close below</th></tr>'
+              + "".join(rows) + "</table>")
+    days = max((c["levels"]["history_days"] for c in good(data) if c.get("levels")), default=0)
+    scenarios_rows = [
+        ("Stress persists", f"A metric that is at rank {agent.ALERT_RANK:g} or higher stays there after the next completed day.",
+         f"The agent stays quiet for that coin: it is in the last {agent.HISTORY_LIMIT} decisions.", f"The rank falls below {NEAR_RANK:g}."),
+        ("Back to normal", f"Every rank of a coin is below {NEAR_RANK:g}.", "The coin reads as calm. No alert.", f"Any rank returns to {agent.ALERT_RANK:g} or higher."),
+        ("A new breach", "A coin that has not breached closes beyond one of the levels above.", "The next daily run sends one brief alert for that coin and cites the playbook rule.",
+         "The close stays between the levels, or the candle or data is not valid."),
+    ]
+    body = "".join(f"<tr><td><b>{esc(a)}</b></td><td>{esc(b)}</td><td>{esc(c)}</td><td>{esc(d)}</td></tr>" for a, b, c, d in scenarios_rows)
+    return ('<section class="card"><h2>Conditional watch scenarios<span class="chip watch">CONDITIONS TO MONITOR, NOT PREDICTIONS</span></h2>'
+            '<p class="sub">No probability is given and no price is forecast. Each scenario is a condition that can be observed, what the agent does when it happens, '
+            'and what would show the scenario no longer applies.</p>'
+            f'<table><tr><th>Scenario</th><th>Condition to observe</th><th>What the agent does</th><th>Invalidation</th></tr>{body}</table>'
+            '<p class="sub" style="margin-top:14px"><b>Next-day closes that would put a metric at the alert rank.</b> Worked out from each coin\'s own history by code. A close between the two levels of a metric leaves it below the alert rank.</p>'
+            f'{levels}'
+            f'<p class="sub"><b>Uncertainty.</b> The levels use up to {days} days of each coin\'s own history and assume the 30-day window moves forward by one day. '
+            'A new day also shifts the history a little, so read each level as approximate. A rank within five points of the alert rank can cross it in a single day. '
+            'A level is no longer valid once the next candle completes, or if Kraken returns incomplete or stale data.</p></section>')
+
+
 def chart_script(specs):
     payload = json.dumps(specs).replace("</", "<\\/")
     return ('<script src="%s"></script><script>(function(){var specs=%s;var cfg={displayModeBar:false,responsive:true};'
@@ -448,7 +691,7 @@ def build_html(data):
             '<section class="card"><h2>Charts<span class="chip code">COMPUTED BY CODE</span></h2>'
             '<p class="sub">Ranks compare today with the coin\'s own past, so a rank of 95 means higher than about 95% of its own days.</p>'
             '<div class="grid2"><div><b>Price, indexed to 100 (last 90 days)</b><div class="chart" data-chart="price"></div></div>'
-            '<div><b>Latest ranks against the alert line</b><div class="chart" data-chart="ranks"></div></div></div>'
+            '<div><b>Today against each coin\'s own history (rank, 0 to 100)</b><div class="chart" data-chart="ranks"></div></div></div>'
             '<div style="margin-top:12px"><b>How unusual each coin has been: highest of the three ranks, last 60 days</b>'
             '<div class="chart" data-chart="history"></div></div></section>')
     generated = data["generated"]
@@ -462,19 +705,22 @@ def build_html(data):
 <span class="pill {tone}">{esc(label)}: {esc(summary_line)}</span>{demo}</div></header>
 <main class="wrap">
 <div class="kpis">{kpi_html}</div>
-<section class="card"><h2>How to read this report</h2><div class="legend">
-<span><span class="chip code">COMPUTED BY CODE</span> numbers, ranks, headlines, triggers</span>
-<span><span class="chip ai">WRITTEN BY AI</span> the analysis text</span>
-<span><span class="chip check">CHECKED BY CODE</span> guardrails on the AI's decision</span></div></section>
 {question_section()}
 <section class="card"><h2>Headlines<span class="chip code">COMPUTED BY CODE</span></h2><ul class="clean">{head}</ul></section>
 <section class="card"><h2>Market snapshot<span class="chip code">COMPUTED BY CODE</span></h2>
 <p class="sub">Each value is followed by its rank (0 to 100) against that coin's own history. Red is at or above {agent.ALERT_RANK:g}, amber is {NEAR_RANK:g} to below {agent.ALERT_RANK:g}.</p>{snapshot_table(data)}</section>
 {charts_html}
+{context_section(data)}
+{base_rate_section(data)}
 {ai_section(data)}
-{scenario_section()}
 <section class="card"><h2>What to watch at the next review<span class="chip watch">MONITORING TRIGGERS, NOT FORECASTS</span></h2><ul class="clean">{watch}</ul></section>
+{watch_section(data)}
 <section class="card"><h2>Decision history<span class="chip code">FROM THE SHEET</span></h2>{decision_table(data)}</section>
+{scenario_section()}
+<section class="card"><h2>How to read this report</h2><div class="legend">
+<span><span class="chip code">COMPUTED BY CODE</span> numbers, ranks, headlines, triggers</span>
+<span><span class="chip ai">WRITTEN BY AI</span> the analysis text</span>
+<span><span class="chip check">CHECKED BY CODE</span> guardrails on the AI's decision</span></div></section>
 <footer><b>Education only. Not financial advice.</b> This report contains no price forecast and makes no recommendation. Thresholds are descriptive conventions
 (rank {agent.ALERT_RANK:g}, 30-day window, daily candles), documented with reasons in playbook.md. Market data: Kraken public OHLC API.
 Generated by the Crypto Watch Agent from its own tools; see the repository README for the method and guardrails.</footer>
@@ -537,12 +783,12 @@ def main(argv=None):
 
     now = datetime.now(timezone.utc)
     if args.demo:
-        coins = demo_coins()
+        coins, cross = demo_coins(), demo_cross()
         decisions, note = demo_decisions()
     else:
-        coins = gather(now)
+        coins, cross = gather(now)
         decisions, note = fetch_decisions()
-    data = {"coins": coins, "decisions": decisions, "decisions_note": note, "demo": args.demo,
+    data = {"coins": coins, "cross": cross, "decisions": decisions, "decisions_note": note, "demo": args.demo,
             "generated": now.strftime("%Y-%m-%d %H:%M")}
     page = build_html(data)
     with open(args.out, "w", encoding="utf-8") as handle:

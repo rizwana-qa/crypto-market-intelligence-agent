@@ -41,6 +41,42 @@ Rule: a drawdown depth rank of 95 or higher is unusual.
 
 Reason: a drawdown shows damage that a single day's return hides. Ranking the depth against the coin's own 30-day drawdowns keeps the rule comparable across coins. Source: own design, Assignment 1 method; frequency backtested by calibrate.py.
 
+## Volume rule
+Keywords: volume, traded, turnover, activity, participation, confirm, thin, heavy, ratio, spike.
+
+Definition: volume_ratio_30d is today's traded volume divided by the mean daily volume of the 30 days before it. The volume rank is the percentile rank of that ratio inside the coin's own history of the same ratio. The volume is what Kraken reports for its own market in the coin itself, not market-wide volume.
+
+Rule: a volume rank of 95 or higher is unusual and is listed in the "flags" of the market summary. Volume is context: it never raises an alert on its own. When a price rank breaches, say whether volume was also unusual.
+
+Reason: a large move on heavy volume is a different event from the same move on thin volume, so volume helps to read a breach without becoming a trigger of its own. Source: own design; the Kraken candle volume field is described in the Kraken REST API documentation (OHLC).
+
+## Relative strength rule
+Keywords: relative strength, outperform, underperform, group, leader, laggard, compare, versus, peers.
+
+Definition: a coin's relative strength is its 30-day return minus the mean 30-day return of the watchlist coins that have data (vs_group_pct). The rank compares today's value with the same value on earlier days of the history that the coins have in common. Near 100 is unusually strong against the group, near 0 unusually weak.
+
+Rule: a relative strength rank of 95 or higher, or 5 or lower, is unusual and is listed in the "flags" of get_cross_asset_summary. It is context: it never raises an alert on its own.
+
+Reason: a coin can fall while the whole group falls, or fall alone. The difference points to a coin-specific event or a market-wide one. Source: own design (a simple spread against an equal-weight group); 5 is 100 minus the alert rank of 95.
+
+## Correlation rule
+Keywords: correlation, relationship, together, decouple, diversify, cross-asset, pair, co-movement, link.
+
+Definition: for each pair of coins, the Pearson correlation of the last 30 daily simple returns (BTC-ETH, BTC-XRP, ETH-XRP). The rank compares today's correlation with the same 30-day correlation on earlier days of the common history.
+
+Rule: a correlation rank of 95 or higher (unusually tight) or 5 or lower (unusually loose) is unusual and is listed in the "flags" of get_cross_asset_summary. It is context: it never raises an alert on its own.
+
+Reason: crypto coins usually move together, so a pair that stops moving together, or moves together far more than usual, changes how one coin's move should be read against the others. Source: own design; Pearson correlation as in any statistics text; the 30-day window matches the other metrics.
+
+## Trend label
+Keywords: trend, direction, up, down, mixed, momentum, 60-day, change, return.
+
+Definition: "up" when the 30-day change and the 60-day change are both positive and the last close is above its 30-day average; "down" for the mirror image; otherwise "mixed". The 30 and 60-day changes are given in percent.
+
+Rule: the label describes the past. It is context, never a forecast, and never raises an alert on its own.
+
+Reason: a single number such as the distance from the 30-day average cannot say whether a move fits a longer direction. Source: own design with two simple windows.
+
 ## Alert rules
 Keywords: alert, threshold, rank, near threshold, calm, normal, decision, when, breaches, unusual.
 
@@ -50,6 +86,7 @@ Rules:
 3. Near threshold: a rank from 90 up to, but not including, 95. No alert. It may be mentioned in the reasoning as "near threshold".
 4. One alert per day: one short message that covers every coin that breached.
 5. A coin with a data error is never part of an alert (see Data quality).
+6. Volume, relative strength, correlation and the trend label are context. They never raise an alert on their own. When you alert, you may add one short fact of context to the message (for example that volume was also unusual). On a day without an alert, unusual context may be mentioned in the reasoning.
 
 Reasons and sources:
 - 95: by construction a rank of 95 or higher is the top 5 percent of that coin's own days, about one day in 20 for each metric. A bar of 99 would almost never fire. A bar of 90 would fire about one day in 10 for each metric, and readers learn to ignore frequent alerts. The real alert frequency of the three metrics together is measured by calibrate.py (README). This is a design choice, not a market standard and not a trading signal. Source: own design, checked by calibrate.py.
@@ -66,7 +103,7 @@ Reason: a spike stays inside the 30-day window for 30 days, so its rank stays hi
 Keywords: wording, message, alert text, advice, language, describe, format, length, short, words.
 
 Rules:
-- Describe what the numbers show: name the coin, the metric, the value and the rank.
+- Describe what the numbers show: name the coin, the metric, the value and the rank. Describing context is allowed, for example "volume was 2.4 times its 30-day average".
 - At most 280 characters. Plain words.
 - No advice and no prediction. Never tell anyone to act. Do not use the words buy, sell, long, short, hold, entry, exit, accumulate, should or recommend.
 - Use only numbers returned by the tools. If data was unavailable, say so and give no number for that coin.

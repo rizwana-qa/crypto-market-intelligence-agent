@@ -43,6 +43,8 @@ class Page(unittest.TestCase):
                      "Market snapshot", "What the agent does in each situation", "AI analysis", "WRITTEN BY AI",
                      "PASSED THE CODE GUARDRAILS", "What to watch at the next review", "NOT FORECASTS", "Decision history", "Education only"):
             self.assertIn(text, page)
+        self.assertIn(report.MONITORING_QUESTION[:60], page.replace("&#x27;", "'"))
+        self.assertIn("not part of the agent yet", page)
         for coin in agent.WATCHLIST:
             self.assertIn(coin, page)
 

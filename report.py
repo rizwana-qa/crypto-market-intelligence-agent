@@ -31,6 +31,11 @@ CHART_DAYS = 90      # length of the price chart
 RANK_DAYS = 60       # length of the rank history chart
 NEAR_RANK = 90.0     # same band as playbook.md, "Near threshold"
 DECISION_ROWS = 10
+MONITORING_QUESTION = (
+    "Across BTC/USD, ETH/USD and XRP/USD, what has changed in the latest completed daily market data, which movements or relationships "
+    "are unusual compared with each asset's historical behaviour, what do trends, volatility, volume, relative strength and cross-asset "
+    "relationships indicate, and what evidence-based forward scenarios, uncertainty levels, risk flags and invalidation conditions should be monitored?"
+)
 
 
 # ------------------------------------------------------------------------------------------------
@@ -343,7 +348,9 @@ def question_section():
     coins = " &middot; ".join(esc(c) for c in agent.WATCHLIST)
     return (
         '<section class="card"><h2>The question this agent answers</h2>'
-        f'<blockquote class="q">{esc(agent.QUESTION)}</blockquote>'
+        f'<blockquote class="q">{esc(MONITORING_QUESTION)}</blockquote>'
+        '<p class="sub"><b>What the agent answers each day today:</b> ' + esc(agent.QUESTION) + ' '
+        'Volume, relative strength, cross-asset relationships and forward scenarios are not part of the agent yet. The agent makes no forecast, by design.</p>'
         f'<div class="facts"><span>Watchlist: {coins} (USD pairs)</span><span>Data: Kraken daily candles, latest completed UTC day</span>'
         f'<span>Cadence: once a day, 05:17 UTC</span><span>Output: one Sheet row, and an email when there is an alert</span></div></section>')
 

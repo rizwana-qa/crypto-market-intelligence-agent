@@ -6,7 +6,31 @@ Densight Labs AI Masterclass, Assignments 2 and 3: Build a Crypto Watch Agent.
 
 ## Question and watchlist
 
+**Monitoring question**
+
+> Across BTC/USD, ETH/USD and XRP/USD, what has changed in the latest completed daily market data, which movements or relationships are unusual compared with each asset's historical behaviour, what do trends, volatility, volume, relative strength and cross-asset relationships indicate, and what evidence-based forward scenarios, uncertainty levels, risk flags and invalidation conditions should be monitored?
+
+**What the agent runs on each day.** The prompt sent to the AI is the narrower question in `QUESTION` in `agent.py`, because the agent can only answer from the data and rules it has:
+
 > Is BTC, ETH or XRP showing unusual volatility, distance from its 30-day average or drawdown in its latest completed daily candle compared with its own history, and is the data reliable enough to say so?
+
+**Coverage of the monitoring question today.** This table says what the code does, so the question is not claimed to be answered more than it is.
+
+| Part of the question | Status | How |
+|---|---|---|
+| What has changed in the latest completed daily data | Implemented | Latest completed candle only (today's unfinished candle is dropped): last close, daily return, and the three metrics. No day-over-day comparison of ranks |
+| Unusual compared with each asset's own history | Implemented | Each metric is ranked (percentile, 0 to 100) against that coin's own history, up to about 700 days |
+| Trends | Partly | Distance from the 30-day average (its sign shows above or below). No trend slope or other trend indicator |
+| Volatility | Implemented | 30-day daily volatility (sample standard deviation of 30 daily returns) |
+| Volume | Not implemented | Kraken returns volume in every candle, but the agent reads only the time and the close |
+| Relative strength | Not implemented | Each coin is assessed on its own |
+| Cross-asset relationships | Not implemented | No correlation or spread between BTC, ETH and XRP |
+| Forward scenarios | Not produced, by design | The playbook and the code forbid prediction and advice, because the project is for education only |
+| Uncertainty levels | Partly | Ranks show how unusual a value is, and data checks decide whether a coin can be assessed at all. No confidence intervals |
+| Risk flags | Implemented | Alert (rank 95 or higher), near threshold (90 to below 95), and data unavailable |
+| Invalidation conditions | Partly | The executive brief lists monitoring triggers, such as how far a rank is below the alert rank and which data problems pause alerts. They are not tied to a forecast, since none is made |
+
+Parts marked "Not implemented" are the next steps for this project: they need new tools, playbook rules and tests, and the daily question would be widened at the same time.
 
 | Coin | Kraken pair | Kraken result key |
 |---|---|---|
@@ -14,7 +38,15 @@ Densight Labs AI Masterclass, Assignments 2 and 3: Build a Crypto Watch Agent.
 | Ethereum (ETH) | `ETHUSD` | `XETHZUSD` |
 | XRP | `XRPUSD` | `XXRPZUSD` |
 
-Data: Kraken public OHLC endpoint, daily candles (`interval=1440`), no key. BTC and ETH were verified in Assignment 1. The XRP result key was checked against Kraken's `AssetPairs` endpoint (`XRPUSD` is stored under `XXRPZUSD`).
+### Kraken API used for the data
+
+- **Endpoint:** `GET https://api.kraken.com/0/public/OHLC` (Kraken REST API, "Get OHLC Data"), with `pair` set to `XBTUSD`, `ETHUSD` or `XRPUSD` and `interval=1440` for daily candles. It is a public endpoint: no API key and no account are needed.
+- **Each candle:** `[time, open, high, low, close, vwap, volume, count]`. The agent uses `time` and `close`.
+- **Depth:** Kraken returns up to 720 of the most recent candles, which is why the history used for ranking is about 700 days.
+- **Unfinished candle:** the last entry in the reply is the current, not-yet-committed day. The agent drops it, so every number is from a completed UTC day.
+- **Checks in code:** the reply must contain exactly the expected result key (`XXBTZUSD`, `XETHZUSD` or `XXRPZUSD`), every row must be 8 values with a positive close, the days must be consecutive with no gap, and the latest completed candle must be yesterday. Anything else is an error, never a guess. A failed request is tried up to 3 times.
+- **Pair names:** the result keys were confirmed against Kraken's `GET /0/public/AssetPairs` endpoint (`XRPUSD` is stored under `XXRPZUSD`).
+- **Documentation:** [Get OHLC Data](https://docs.kraken.com/api/docs/rest-api/get-ohlc-data) and [Historical data](https://docs.kraken.com/exchange/guides/general/historical-data).
 
 ## How it works
 

@@ -59,7 +59,7 @@ BANNED_WORDS = [
 ]
 ADVICE_RE = re.compile(r"\b(?:" + "|".join(re.escape(w) for w in BANNED_WORDS) + r")\b", re.IGNORECASE)
 
-MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 KRAKEN_URL = "https://api.kraken.com/0/public/OHLC"
 PLAYBOOK_PATH = Path(__file__).with_name("playbook.md")

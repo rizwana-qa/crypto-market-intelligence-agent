@@ -407,6 +407,29 @@ class Delivery(QuietCase):
                 agent.sheet_post({"action": "history"})
         self.assertIn("UNAUTHORIZED", str(caught.exception))
 
+    def test_an_unauthorized_hint_says_what_is_wrong_without_the_key(self):
+        reply = mock.Mock(status_code=200, json=lambda: {"success": False, "error": "UNAUTHORIZED"})
+        reply.raise_for_status = lambda: None
+        cases = [
+            ("https://example.invalid/exec", "no ?key="),
+            ("https://example.invalid/exec?key=short", "5 characters"),
+            ("https://example.invalid/exec?key=abcdefghijklmnopqrst%0A", "line break"),
+        ]
+        for url, expected in cases:
+            with mock.patch.dict("os.environ", {"SHEET_URL": url}), mock.patch.object(agent.requests, "post", return_value=reply):
+                with self.assertRaises(agent.AgentError) as caught:
+                    agent.sheet_post({"action": "history"})
+            self.assertIn(expected, str(caught.exception))
+            self.assertNotIn("abcdefghijklmnopqrst", str(caught.exception))
+
+    def test_a_trailing_newline_in_the_secret_is_removed(self):
+        reply = mock.Mock(status_code=200, json=lambda: {"success": True})
+        reply.raise_for_status = lambda: None
+        with mock.patch.dict("os.environ", {"SHEET_URL": "https://example.invalid/exec?key=abcdefghijklmnop\n"}), \
+                mock.patch.object(agent.requests, "post", return_value=reply) as post:
+            agent.sheet_post({"action": "history"})
+        self.assertEqual(post.call_args.args[0], "https://example.invalid/exec?key=abcdefghijklmnop")
+
     def test_the_posted_row_holds_the_decision(self):
         reply = mock.Mock(status_code=200, json=lambda: {"success": True, "row": 2, "emailed": True})
         reply.raise_for_status = lambda: None

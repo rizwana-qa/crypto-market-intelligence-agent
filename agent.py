@@ -20,6 +20,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import requests
 
@@ -236,8 +237,22 @@ def tool_market_summary(coin):
 # ==============================================================================================
 # 3. GOOGLE SHEET (Apps Script web app): memory tool and delivery. The key travels inside SHEET_URL.
 # ==============================================================================================
+def key_hint(url):
+    """Say what is wrong with the key part of SHEET_URL without printing the key itself."""
+    values = parse_qs(urlparse(url).query).get("key")
+    if not values or not values[0]:
+        return "SHEET_URL has no ?key=... part at the end"
+    key = values[0]
+    notes = [f"the key in SHEET_URL has {len(key)} characters"]
+    if any(ch.isspace() for ch in key):
+        notes.append("it contains a space or line break")
+    if len(key) < 16:
+        notes.append("it is shorter than 16 characters")
+    return "; ".join(notes) + ". It must be identical to the KEY Script Property"
+
+
 def sheet_post(payload):
-    url = os.environ.get("SHEET_URL", "")
+    url = os.environ.get("SHEET_URL", "").strip()
     if not url:
         raise AgentError("SHEET_URL is not set")
     try:
@@ -249,7 +264,8 @@ def sheet_post(payload):
     log(f"[sheet] {payload['action']} -> HTTP {response.status_code}")
     if not isinstance(body, dict) or body.get("success") is not True:
         code = body.get("error") if isinstance(body, dict) else "unknown"
-        raise AgentError(f"The Sheet web app refused the request: {code}")
+        extra = f" ({key_hint(url)})" if code == "UNAUTHORIZED" else ""
+        raise AgentError(f"The Sheet web app refused the request: {code}{extra}")
     return body
 
 
@@ -407,6 +423,8 @@ def run_tool(tools, name, args, evidence):
         result = tools[name](**args)
     except Exception as error:  # a broken tool must not crash the agent; it becomes an error result
         result = {"error": f"tool failed: {type(error).__name__}"}
+    if isinstance(result, dict) and "error" in result:
+        log(f"  -> {name} returned an error: {str(result['error'])[:200]}")
     evidence.append({"tool": name, "args": args, "result": result})
     return result
 

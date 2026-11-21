@@ -64,6 +64,11 @@ def _number(value, digits):
     return "" if value is None else f"{agent.round_clean(value, digits):.{digits}f}"
 
 
+def _exact(value):
+    """Prices and volumes as Kraken sent them (up to 12 significant digits), so a coin priced under 1 USD, such as XRP, keeps its digits."""
+    return f"{value:.12g}"
+
+
 def candle_rows(coin, raw_rows, now):
     """Every raw Kraken row as CSV values, with the unfinished day marked."""
     today = int(now.timestamp()) // agent.SECONDS_PER_DAY * agent.SECONDS_PER_DAY
@@ -88,7 +93,7 @@ def factor_rows(coin, raw_rows, now):
         ranks = agent.ranks_at(series, i) if i >= first_ranked else None
         drawdown = None if series["drawdown"][i] is None else -series["drawdown"][i] * 100
         rows.append([
-            coin, agent.format_date(stamps[i]), _number(closes[i], 4), _number(volumes[i], 4),
+            coin, agent.format_date(stamps[i]), _exact(closes[i]), _exact(volumes[i]),
             _number(returns[i - 1] * 100, 4) if i > 0 else "",
             _number(ratios[i], 4),
             _number(None if series["volatility"][i] is None else series["volatility"][i] * 100, 4),

@@ -73,3 +73,16 @@ This log records real events from the build sessions. Read it once and change an
 - My estimate was about 13,000 to 15,000 tokens per scenario. The measured average is about 23,000 (13,592 for a calm scenario, 26,000 to 30,000 when the agent writes an alert). The plan was rebuilt on the measured numbers and now allows about six scenarios a day, not ten.
 - The README said a full `--measure` costs about 1 million tokens. That was too low: 12 runs of 20 scenarios at about 23,000 tokens is more than 5 million. It now says so and says it needs the paid tier.
 - Scenario 10 did not finish: Groq's free daily cap was reached (197,808 of 200,000 used, about 75,000 of it from the previous day's runs, which I had not counted). It is recorded as "did not finish" in the README and in the Sheet, not as a pass or a fail of the agent. I should have checked the remaining allowance before the second batch.
+
+## 9. Showing the raw data and the columns
+
+**Prompt (in short):** show the data fetched from Kraken, either as a Google Sheet tab or as a CSV saved by the code, and list which factors and columns are fetched and saved.
+
+**Result:** `export_data.py` saves three CSV files: every Kraken candle with all 8 values, every factor the agent calculates per day with its rank, and a file that explains each column. A new README section lists the columns of the CSV files and of all five Sheet tabs.
+
+**What the AI got wrong or I changed:**
+- I had never given the raw data. The earlier request for "a tab that shows the API data" was answered with the `market_data` tab, which holds calculated numbers, and the agent keeps only 3 of the 8 values Kraken sends. The CSV export is the missing piece.
+- The first version of the factors file rounded prices to 4 decimals, which turned XRP's 0.95904 into 0.9590. The live run showed it, so prices and volumes now keep up to 12 significant digits and a test covers it.
+- A first check of the tests by breaking the code on purpose found one weak test: swapping two rank columns was not caught, because the sample data gave the same rank in both. The test now uses days where the three ranks differ, and checks that such days exist.
+- The Agent tab shows only the coins named in an alert, which looked like "2 coins instead of 3". That is how it was built, not a missing coin. The `market_data` tab has all three coins on every run.
+

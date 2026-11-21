@@ -119,6 +119,17 @@ class Export(unittest.TestCase):
                 checked += len({round(v, 1) for v in ranks.values()}) > 1
             self.assertGreater(checked, 3, "the sample data must have days where the three ranks differ, or this test proves nothing")
 
+    def test_close_and_volume_keep_the_digits_kraken_sent(self):
+        rows = [r for r in self.factors if r["coin"] == "XRP"]
+        candles = [r for r in self.candles if r["coin"] == "XRP" and r["status"] == export_data.COMPLETED]
+        for factor, candle in zip(rows, candles):
+            self.assertEqual(float(factor["close"]), float(candle["close"]))
+            self.assertEqual(float(factor["volume"]), float(candle["volume"]))
+        small = export_data.factor_rows("XRP", [[TODAY - (DONE_DAYS - k) * DAY, "0.9", "1", "0.8", "0.95904", "0.9", "44838828.05927659", 5]
+                                                for k in range(DONE_DAYS + 1)], NOW)
+        self.assertEqual(small[-1][2], "0.95904")                   # not 0.9590
+        self.assertEqual(small[-1][3], "44838828.0593")             # 12 significant digits
+
     def test_the_jump_on_the_last_day_reaches_the_alert_rank(self):
         self.assertTrue(any(r["at_alert_rank"] == "TRUE" for r in self.factors if r["date_utc"] == agent.format_date(TODAY - DAY)))
 

@@ -53,6 +53,20 @@ Three limits stay. The agent makes no forecast and gives no advice, by design: t
 - **Pair names:** the result keys were confirmed against Kraken's `GET /0/public/AssetPairs` endpoint (`XRPUSD` is stored under `XXRPZUSD`).
 - **Documentation:** [Get OHLC Data](https://docs.kraken.com/api/docs/rest-api/get-ohlc-data) and [Historical data](https://docs.kraken.com/exchange/guides/general/historical-data).
 
+### New APIs in this version and what each one is for
+
+The first version used one API, Kraken OHLC (daily candles). This version adds five free sources. Each answers one question the daily brief could not answer before. All of them are context only: none of them can raise an alert by itself, and the agent is told to say "unavailable" when one is down.
+
+| New API | Cost | Question it answers for a market adviser | Where it shows up |
+|---|---|---|---|
+| Kraken order book (`/0/public/Depth`) | free, no key | Could a normal-size order move the price? Spread and depth near the price show how thin or deep the market is. | "Liquidity" in the brief |
+| Kraken Futures tickers (`/derivatives/api/v3/tickers`) | free, no key | Are traders crowded on one side? Funding rate (and who pays it) and open interest show leverage building up, which often comes before sharp moves. | "Funding and open interest" |
+| Deribit DVOL (`public/get_volatility_index_data`) | free, no key | Is the options market pricing in unusual moves? Implied volatility and its one-year rank (BTC and ETH only; Deribit has no XRP index). | "Implied volatility" |
+| CoinGecko Demo (`/coins/markets`, `/coins/{id}/market_chart`) | free Demo key, GitHub secret `COINGECKO_API_KEY` | Is the whole market busy or quiet (24-hour volume rank against the past year)? Do two independent price sources agree? | "Market-wide volume" and "Price check" |
+| alternative.me Fear and Greed (`/fng/`) | free, no key | Is market sentiment extreme? | "Fear and greed" |
+
+Two agent tools were added with them. `get_market_context` calls the five sources. `get_alert_history_stats` is not an API: it reads the Sheet history to say how often each coin has reached the alert rank before, so the agent can tell a rare event from a routine one. The details, limits and live check of each source follow.
+
 ### Free data sources for market context
 
 Only free public sources are used. No paid plan and no paid key is needed anywhere. The one optional key is CoinGecko's free Demo key, stored as the GitHub secret `COINGECKO_API_KEY`. Without it the CoinGecko fields say "not configured" and everything else still works.
@@ -69,7 +83,7 @@ Only free public sources are used. No paid plan and no paid key is needed anywhe
 - **Context only.** None of this can raise an alert. Funding, open interest and liquidity have no stored history, so they are described and never flagged. Implied volatility rank and market-wide volume rank reuse the alert rank of 95, and the sentiment index is flagged as extreme at 24 or lower and 76 or higher (own convention). The price cross-check flags a gap above 1% between Kraken and CoinGecko, and it never blocks an alert, because aggregated prices lag in fast markets.
 - **Attribution.** CoinGecko and alternative.me ask for attribution. The brief's footer carries it, with links.
 - **Limits.** CoinGecko's Demo plan has a monthly call cap and a per-minute limit (each run makes 4 CoinGecko calls: one markets call and one volume history per coin, and both the daily run and the brief make them, so about 8 a day, far below the Demo plan's monthly cap). The sources can change their format or limits at any time, which is why each one has its own check in `python agent.py --check-sources` and in the manual `Data sources check` workflow.
-- **Verification status.** Verified offline: every parser against sample replies written to the providers' documented shapes, the fail-soft paths, the rank maths against the agent's own, and the Sheet row width. **Verified live on 2026-11-21** with the manual `Data sources check` workflow ([run 44842220066](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44842220066), 0 required sources failed, using the free CoinGecko Demo key): all five sources answered for all three coins. What the run settled: Kraken's `relativeFundingRate` is the absolute `fundingRate` divided by the mark price (BTC 0.6995 / 58,930 = 1.187e-5 against 1.189e-5; ETH and XRP agree the same way), so it is a fraction of the price, and Kraken's support pages describe funding as set for a 1-hour period, so the code reports it as percent per hour. Open interest is in coins for the linear `PF_` contracts (BTC 2,339 coins is about $138M, plausible for Kraken Futures). The XRP contract is `PF_XRPUSD`. CoinGecko's id for XRP is `ripple` (its market chart answered). Today's partial day is dropped, so the latest volume day used is yesterday's stamp, and CoinGecko stamps its daily points at 00:00 UTC, so treat `as_of` as accurate to about one day. The live run also found a flaw that the sample replies could not show: Kraken's default 100 order-book levels did not reach 1% from the price for any coin, so the depth was labelled "within 1%" but covered less. The code now fetches up to 500 levels, uses one band for both sides (1% or the narrower range the book covers) and reports it. Re-run live after that fix ([run 44842558674](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44842558674)): the band is the full 1% for all three coins, so bid and ask depth are comparable. The full agent has not yet been run live with the new tools, and scenarios 8 to 20 have not been run with the real AI.
+- **Verification status.** Verified offline: every parser against sample replies written to the providers' documented shapes, the fail-soft paths, the rank maths against the agent's own, and the Sheet row width. **Verified live on 2026-11-21** with the manual `Data sources check` workflow ([run 44842220066](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44842220066), 0 required sources failed, using the free CoinGecko Demo key): all five sources answered for all three coins. What the run settled: Kraken's `relativeFundingRate` is the absolute `fundingRate` divided by the mark price (BTC 0.6995 / 58,930 = 1.187e-5 against 1.189e-5; ETH and XRP agree the same way), so it is a fraction of the price, and Kraken's support pages describe funding as set for a 1-hour period, so the code reports it as percent per hour. Open interest is in coins for the linear `PF_` contracts (BTC 2,339 coins is about $138M, plausible for Kraken Futures). The XRP contract is `PF_XRPUSD`. CoinGecko's id for XRP is `ripple` (its market chart answered). Today's partial day is dropped, so the latest volume day used is yesterday's stamp, and CoinGecko stamps its daily points at 00:00 UTC, so treat `as_of` as accurate to about one day. The live run also found a flaw that the sample replies could not show: Kraken's default 100 order-book levels did not reach 1% from the price for any coin, so the depth was labelled "within 1%" but covered less. The code now fetches up to 500 levels, uses one band for both sides (1% or the narrower range the book covers) and reports it. Re-run live after that fix ([run 44842558674](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44842558674)): the band is the full 1% for all three coins, so bid and ask depth are comparable. The real AI has been run against the new tools only on fake scenario data (scenarios 9 and 17 to 20, see Results). The agent has not yet run end to end on live data with the new tools. That happens on the first daily run after the pull request is merged.
 - **Documentation:** [Kraken Depth](https://docs.kraken.com/api/docs/rest-api/get-order-book), [Kraken Futures tickers](https://docs.kraken.com/api/docs/futures-api/trading/get-tickers), [Deribit volatility index](https://docs.deribit.com/api-reference/market-data/public-get_volatility_index_data), [CoinGecko API](https://docs.coingecko.com/), [Fear and Greed API](https://alternative.me/crypto/api/).
 
 ## How it works
@@ -169,8 +183,8 @@ How this differs from a generic "plan, act, reflect" loop, so the diagram is not
 4. Check the pairs and calibrate the thresholds: `python calibrate.py`
 5. Run the agent: `python agent.py` (add `--dry-run` to skip the Sheet; `--mode planner --reviewer on` for another version).
 6. Check the free data sources (no AI, no tokens): `python agent.py --check-sources`. In GitHub: Actions > Data sources check > Run workflow.
-7. Run the tests: `python tests/test_guardrails.py -v`, `python tests/test_context.py -v`, `python tests/test_report.py -v` and `python tests/test_sources.py -v` (all offline), and `python agent.py --test` (20 scenarios on fake tools, real AI). `--only 8-20` runs some of them and `--publish` also writes every result to the `scenarios` tab. Sixteen scenarios on the Agent loop cost about 190,000 tokens before the two context tools were added, close to the free daily limit of 200,000, and the new tools make each run longer, so run the 20 in two halves (`--only 1-10`, then `--only 11-20` on another day) on the free tier.
-8. Measure the four versions: `python agent.py --measure` (12 full runs, about 1 million tokens; this is more than the free Groq limit of 200,000 tokens per day, so it needs the paid tier or several days).
+7. Run the tests: `python tests/test_guardrails.py -v`, `python tests/test_context.py -v`, `python tests/test_report.py -v` and `python tests/test_sources.py -v` (all offline), and `python agent.py --test` (20 scenarios on fake tools, real AI). `--only 8-20` runs some of them and `--publish` also writes every result to the `scenarios` tab. With the six tools a scenario costs about 23,000 tokens on average (13,600 for a calm one, up to 30,000 when the agent sends an alert), so the 20 scenarios cost about 460,000 tokens. The free tier allows 200,000 a day, so run them in batches of about six over three or four days (see Token budget for scenario runs).
+8. Measure the four versions: `python agent.py --measure` (12 full runs of all 20 scenarios; at about 23,000 tokens a scenario that is more than 5 million tokens, and the planner and reviewer versions use more AI calls than the Agent loop. This needs the paid tier. On the free tier it cannot be done.)
 
 ## Playbook thresholds, with reason and source
 
@@ -221,7 +235,7 @@ TODO(you): pick one number from the market tool (for example `volatility_30d_dai
 
 ### Two kinds of tests
 
-- **Offline, no AI, no network (175 tests):** `tests/test_guardrails.py` (53), `tests/test_context.py` (34), `tests/test_report.py` (31) and `tests/test_sources.py` (57). A scripted AI gives the same answers every time, so these are exact. They check the maths against hand calculations, the new metrics, the rule that context never alerts alone, the Sheet tab widths against `Code.gs`, and the brief. The trigger levels in the brief are verified by putting each level in as the next close and recomputing the metric: it lands on the target value. The sources tests feed each parser a sample reply and check the numbers by hand (order-book depth, funding units, the DVOL and volume ranks, the 1% price tolerance), prove that an error never contains a key, that every source being down still gives a complete context, that the fakes have the same fields as the real parsers, and that a context-only alert is blocked. Writing them found one real bug: a price gap of exactly 1% was reported as a disagreement because of floating-point noise, so the comparison now rounds first.
+- **Offline, no AI, no network (177 tests):** `tests/test_guardrails.py` (53), `tests/test_context.py` (34), `tests/test_report.py` (31) and `tests/test_sources.py` (59). A scripted AI gives the same answers every time, so these are exact. They check the maths against hand calculations, the new metrics, the rule that context never alerts alone, the Sheet tab widths against `Code.gs`, and the brief. The trigger levels in the brief are verified by putting each level in as the next close and recomputing the metric: it lands on the target value. The sources tests feed each parser a sample reply and check the numbers by hand (order-book depth, funding units, the DVOL and volume ranks, the 1% price tolerance), prove that an error never contains a key, that every source being down still gives a complete context, that the fakes have the same fields as the real parsers, and that a context-only alert is blocked. Writing them found one real bug: a price gap of exactly 1% was reported as a disagreement because of floating-point noise, so the comparison now rounds first.
 - **Scenario tests, `python agent.py --test` (20 scenarios):** the scenarios in `scenarios.py` on fake market data and a fake history, with the real AI and the real playbook search. A failed scenario exits with code 1, so the GitHub run turns red.
 
 | # | Scenario | Expected |
@@ -247,7 +261,38 @@ TODO(you): pick one number from the market tool (for example `volatility_30d_dai
 | 19 | Every context source unavailable, BTC breach | Alert still sent, nothing invented |
 | 20 | Extreme fear on the sentiment index, calm prices | No alert |
 
-Scenarios 1 to 7 were run with the real AI. Scenarios 8 to 20 have not been run with the real AI yet (see Results).
+Real-AI status on 2026-11-21: scenarios 1 to 7 passed earlier, before the two context tools existed, and need a re-run with six tools. Scenarios 9 and 17 to 20 passed with the real AI on the six tools. Scenario 10 started but did not finish (daily token cap). Scenarios 8 and 11 to 16 have not been run with the real AI yet. See Results.
+
+### Token budget for scenario runs
+
+The Groq free tier allows 8,000 tokens per minute and 200,000 tokens per day for `openai/gpt-oss-120b`. The run log prints the tokens Groq reports for each scenario (`[scenario N: X AI calls, Y tokens]`), so this plan uses measured numbers where there are any.
+
+**Measured, Agent loop with six tools, 2026-11-21 ([run 44843995212](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44843995212) and [run 44845055590](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44845055590)):**
+
+| Scenario | Result | AI calls | Tokens |
+|---|---|---|---|
+| 17 Funding and open interest very high, no breach | PASS (no alert) | 7 | 13,592 |
+| 20 Extreme fear, calm prices | PASS (no alert) | 8 | 19,392 |
+| 18 Price sources disagree during a BTC breach | PASS (alert) | 10 | 26,089 |
+| 9 Price spike with unusual volume | PASS (alert) | 10 | 27,588 |
+| 19 Every context source unavailable, BTC breach | PASS (alert) | 11 | 29,758 |
+| 10 Two coins breach at once | did not finish: daily cap reached | 4 | 6,098 |
+
+The five finished scenarios cost 116,419 tokens, about 23,000 each. A calm scenario with no alert costs the least (about 14,000 to 19,000). A scenario where the agent writes and checks an alert costs about 26,000 to 30,000. The other scenarios are estimated by type, not measured.
+
+**How the cap behaves.** On 2026-11-21 Groq refused scenario 10 with HTTP 429: limit 200,000, used 197,808, requested 2,489, try again in 2 minutes 8 seconds. About 297 tokens were missing and the wait was 128 seconds, which is about 2.3 tokens a second, or 200,000 per 24 hours. My reading is that the allowance refills steadily (about 8,300 tokens an hour) and does not reset at midnight. This is inferred from that one message, not from Groq's documentation. The 197,808 included about 75,000 tokens from the previous day's runs, so check the usage page before a big batch.
+
+**Plan for the free tier.** Keep about 30,000 tokens free for the scheduled daily run (an estimate: the daily run with the new tools has not been measured). That leaves about 170,000 a day, or about six to seven scenarios. Ranked by what would hurt most if the agent got it wrong:
+
+| Day | Scenarios | Why these | Tokens |
+|---|---|---|---|
+| 1 (2026-11-21, done) | 17, 18, 19, 20, 9 | The new tools: leverage build-up with a calm price, price sources disagreeing in a real breach, every context source down in a breach, extreme sentiment with a calm price, and a volume-confirmed breakout | 116,419 measured |
+| 2 | 10, 14, 11, 3, 8, 12 | Real breaches first: a multi-coin sell-off (10), a new coin after a repeat alert (14), a single coin (11), repeat-alert suppression so alerts do not become noise (3), volume without a price move (8), a correlation breakdown (12) | about 130,000 (estimate) |
+| 3 | 13, 16, 15, 4, 5, 2 | XRP relative-strength outlier (13), cross-asset data missing (16), instruction hidden in text (15), Kraken outage (4), advice trap (5), the plain spike (2) | about 130,000 (estimate) |
+| 4 | 1, 6, 7 | Calm, one coin down, near threshold: passed earlier with four tools, re-run with six | about 45,000 (estimate) |
+
+Batches are run with `python agent.py --test --only 10,14,11,3,8,12 --publish`, or in GitHub: Actions > Tests > Run workflow, with the `only` list and `publish` ticked. Every result is added to the `scenarios` tab, including a scenario that did not finish.
+
 
 ### Red, then green
 
@@ -274,13 +319,17 @@ Each version is to be run three times on the same scenarios with `python agent.p
 - **Planner (first plan prompt):** 6 of 7 ([run 44740770242](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44740770242)). The failed scenario was "same spike, already alerted yesterday": the plan skipped the repeat-alert rule search. The plan prompt asked for about 10 steps while the limit was 8. The fix is a rewritten plan prompt and a limit of 10 (it requires one step per coin, one cross-asset step, one history step and the rule searches). It has not been re-run with the real AI.
 - **Planner + reviewer:** no result. The run ([44741524858](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44741524858)) was cancelled after repeated Groq rate-limit answers (HTTP 429) on the free tier, so it proves nothing either way.
 - **Agent loop + reviewer:** not run.
-- **Scenarios 8 to 16:** not run with the real AI. One full run of 16 on the Agent loop is about 190,000 tokens, close to the free daily limit of 200,000, and a full `--measure` is about 1 million tokens.
+- **Agent loop with the six tools, scenarios 9 and 17 to 20 (2026-11-21):** 5 of 5 passed. Scenarios 17 to 20: 36 AI calls, 88,831 tokens, 27 rate-limit waits ([run 44843995212](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44843995212)). Scenario 9: 10 AI calls, 27,588 tokens ([run 44845055590](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44845055590)). These scenarios use fake market data and fake tool replies with the real AI, not live data.
+- **Scenario 10 (two coins breach at once):** did not finish. Groq's free daily cap was reached after 4 AI calls (HTTP 429, see Token budget), so the run counts as "did not finish", not as a wrong answer. Its row in the `scenarios` tab says so. It is the first scenario of day 2.
+- **Scenarios 8 and 11 to 16:** not run with the real AI yet. Scenarios 1 to 7 should be re-run now that there are six tools.
+- **Cost:** about 23,000 tokens per scenario on average, so the 20 scenarios on the Agent loop cost about 460,000 tokens, more than two days of the free allowance. A full `--measure` is out of reach on the free tier.
 
 TODO(you): paste the full table once `--measure` has been run (paid tier, or several days).
 
 | Version | Passes (run 1, run 2, run 3) | Calls per run | Ever failed to finish? |
 |---|---|---|---|
-| Agent loop | 7/7 on scenarios 1 to 7 (one run only) | 46 | no |
+| Agent loop | 7/7 on scenarios 1 to 7 (one run only, four tools) | 46 | no |
+| Agent loop, six tools | 5/5 on scenarios 9 and 17 to 20 (one run only); scenario 10 hit the daily cap | 46 for the 5 | 1 (scenario 10, rate limit) |
 | Agent loop + reviewer | not run | | |
 | Planner | 6/7 on scenarios 1 to 7 with the first plan prompt (one run only) | | no |
 | Planner + reviewer | no result (run cancelled by the rate limit) | | |
@@ -323,7 +372,7 @@ The four extra tabs need the updated `Code.gs` deployed (Deploy > Manage deploym
 | `playbook.md` | The agent's own rules, with a reason and a source for every threshold |
 | `calibrate.py` | Backtest of the alert rank on live Kraken history |
 | `apps_script/Code.gs` | The Google Apps Script web app (history, save, append, report email). No key in it |
-| `tests/test_guardrails.py`, `tests/test_context.py`, `tests/test_report.py`, `tests/test_sources.py` | Offline tests (175) |
+| `tests/test_guardrails.py`, `tests/test_context.py`, `tests/test_report.py`, `tests/test_sources.py` | Offline tests (177) |
 | `.github/workflows/daily.yml`, `tests.yml`, `report.yml`, `sources.yml` | The daily run, the tests on every code or playbook change, the executive brief after each daily run, and the manual data-source check |
 | `AI_LOG.md` | The five most important prompts, and what the AI got wrong or I changed |
 

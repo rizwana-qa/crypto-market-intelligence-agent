@@ -62,3 +62,14 @@ This log records real events from the build sessions. Read it once and change an
 - My first test run had three failures. Two were arithmetic slips of my own in the expected values (a DVOL rank that forgot an equal value counts half, and an ask-depth sum that was off by 228). The tests were corrected, not the code. The third was a real bug in the code: a price gap of exactly 1% was flagged as a disagreement because of floating-point noise. It is fixed and tested.
 - The build environment cannot reach the data sources, so the sample replies were written from the documentation. The manual data check on GitHub settled what they could not: the funding rate and open interest units, the XRP futures symbol and CoinGecko's XRP id all matched. It also found a flaw the samples hid: Kraken's default 100 order-book levels did not reach 1% from the price for any coin, so "depth within 1%" covered less than it said and bid and ask were not comparable. The code now fetches up to 500 levels, uses one band for both sides and reports it.
 
+
+## 8. Which scenarios to run within the free token cap
+
+**Prompt (in short):** as a data analyst and market adviser, pick the scenarios worth running in a day within the token capacity, estimate them, run them live, and update the README with the new APIs and what each is for.
+
+**Result:** the run log and the RESULT line now print the tokens Groq reports (`llm_tokens`), so planning uses measured numbers. Scenarios 17 to 20 and 9 were run with the real AI and passed. The README has a "New APIs in this version and what each one is for" table and a "Token budget for scenario runs" section with a ranked four-day plan.
+
+**What the AI got wrong or I changed:**
+- My estimate was about 13,000 to 15,000 tokens per scenario. The measured average is about 23,000 (13,592 for a calm scenario, 26,000 to 30,000 when the agent writes an alert). The plan was rebuilt on the measured numbers and now allows about six scenarios a day, not ten.
+- The README said a full `--measure` costs about 1 million tokens. That was too low: 12 runs of 20 scenarios at about 23,000 tokens is more than 5 million. It now says so and says it needs the paid tier.
+- Scenario 10 did not finish: Groq's free daily cap was reached (197,808 of 200,000 used, about 75,000 of it from the previous day's runs, which I had not counted). It is recorded as "did not finish" in the README and in the Sheet, not as a pass or a fail of the agent. I should have checked the remaining allowance before the second batch.

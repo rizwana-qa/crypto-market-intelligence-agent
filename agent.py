@@ -6,6 +6,7 @@ Run it:
     python agent.py --dry-run                        live data and AI, but nothing is posted to the Sheet
     python agent.py --test                           fake tools, real AI; exit code 1 if a scenario fails
     python agent.py --measure                        4 versions x 3 runs, prints the results table
+    python agent.py --check-sources                  call every free data source once, no AI
 
 This project is for education only and is not financial advice.
 """
@@ -23,6 +24,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import requests
+
+import sources
 
 # ==============================================================================================
 # 1. SETTINGS. A coin, a threshold, a banned word or the reviewer switch is changed here.
@@ -45,10 +48,10 @@ UNUSUAL_LOW = 100.0 - ALERT_RANK  # two-sided context metrics: a rank at or belo
 
 DEFAULT_MODE = "agent"  # "agent" (tool loop) or "planner" (plan first, code runs the steps)
 USE_REVIEWER = False    # the reviewer switch; --reviewer on|off overrides it
-MAX_STEPS = 8           # agent loop: the most AI calls before the run stops with an error
+MAX_STEPS = 12          # agent loop: the most AI calls before the run stops with an error (8 before the two context tools; a model that calls one tool at a time needs 9 or more)
 MAX_FIX_ATTEMPTS = 2    # how often the AI may be asked again after an invalid answer
 MAX_REVISIONS = 1       # how often the agent may revise after the reviewer found problems
-MAX_PLAN_STEPS = 10     # planner: the most steps a plan may have (3 market + cross-asset + history + playbook searches)
+MAX_PLAN_STEPS = 12     # planner: the most steps a plan may have (3 market + cross-asset + context + stats + history + playbook searches)
 TREND_LONG_DAYS = 60    # the longer of the two trend windows (the shorter one is WINDOW, 30 days)
 MAX_MESSAGE_CHARS = 280
 MAX_REASONING_CHARS = 600
@@ -69,7 +72,7 @@ KRAKEN_URL = "https://api.kraken.com/0/public/OHLC"
 PLAYBOOK_PATH = Path(__file__).with_name("playbook.md")
 SECONDS_PER_DAY = 86400
 METRICS = ("volatility", "distance", "drawdown")
-STATS = {"llm_calls": 0, "rate_limit_waits": 0}
+STATS = {"llm_calls": 0, "rate_limit_waits": 0, "llm_tokens": 0}   # llm_tokens: what Groq reports as used, to plan against the free daily cap
 
 
 class AgentError(Exception):
@@ -207,6 +210,24 @@ def ranks_at(series_by_metric, i):
         values = [abs(v) if name == "distance" else v for v in series[:i + 1] if v is not None]
         ranks[name] = percentile_rank(values, values[-1])
     return ranks
+
+
+def episodes(flags):
+    """How many separate runs of True a list has: three days in a row at the alert rank are one episode."""
+    return sum(1 for i, flag in enumerate(flags) if flag and (i == 0 or not flags[i - 1]))
+
+
+def base_rate(stamps, closes):
+    """How often the coin was at the alert rank on any of the three price metrics, each day ranked only against the days before it.
+    The first days are skipped until the history is as long as the agent needs (MIN_HISTORY_DAYS), so every day counted could have raised an alert."""
+    series, _ = metric_series(closes)
+    first = WINDOW + MIN_HISTORY_DAYS - 1
+    days, flags = [], []
+    for i in range(first, len(closes)):
+        ranks = ranks_at(series, i)
+        days.append(format_date(stamps[i]))
+        flags.append(max(ranks.values()) >= ALERT_RANK)
+    return {"days": days, "flags": flags, "ranked_days": len(flags), "alert_days": sum(flags), "episodes": episodes(flags)}
 
 
 def add_breaches(summary):
@@ -380,6 +401,44 @@ def tool_cross_asset_summary():
     return result
 
 
+# ---- market context from other free sources (sources.py): liquidity, derivatives, implied volatility, market-wide volume, sentiment.
+def tool_market_context():
+    try:
+        return sources.fetch_context(WATCHLIST, time.time(), os.environ.get("COINGECKO_API_KEY", "").strip())
+    except Exception as error:   # fetch_context never raises on a source problem; this keeps a coding error from stopping the run
+        return {"error": f"market context failed ({type(error).__name__})"}
+
+
+# ---- how often each coin was at the alert rank in its own history (a base rate, computed by code).
+def tool_alert_history_stats():
+    now = datetime.now(timezone.utc)
+    coins, unavailable_coins, union = {}, {}, {}
+    for coin in WATCHLIST:
+        try:
+            stamps, closes, _ = load_coin(coin, now)
+            rate = base_rate(stamps, closes)
+        except (RuntimeError, ValueError, statistics.StatisticsError) as error:
+            unavailable_coins[coin] = str(error)
+            continue
+        if not rate["ranked_days"]:
+            unavailable_coins[coin] = "history too short to count"
+            continue
+        for day, flag in zip(rate["days"], rate["flags"]):
+            union[day] = union.get(day, False) or flag
+        last = next((d for d, f in zip(reversed(rate["days"]), reversed(rate["flags"])) if f), None)
+        coins[coin] = {"ranked_days": rate["ranked_days"], "alert_days": rate["alert_days"],
+                       "share_pct": round(100.0 * rate["alert_days"] / rate["ranked_days"], 1),
+                       "episodes": rate["episodes"], "last_alert_day": last}
+    if not coins:
+        return {"error": f"no coin has enough data: {unavailable_coins}"}
+    flags = [union[d] for d in sorted(union)]
+    result = {"coins": coins, "any_coin": {"ranked_days": len(flags), "share_pct": round(100.0 * sum(flags) / len(flags), 1),
+                                            "episodes": episodes(flags)}}
+    if unavailable_coins:
+        result["unavailable"] = unavailable_coins
+    return result
+
+
 # ==============================================================================================
 # 3. GOOGLE SHEET (Apps Script web app): memory tool and delivery. The key travels inside SHEET_URL.
 # ==============================================================================================
@@ -499,6 +558,34 @@ def cross_rows(evidence, version, stamp, run_id):
              "unusual" if f"correlation {x['pair']}" in flagged else ""] for x in cross.get("correlations", [])]
 
 
+def context_rows(evidence, version, stamp, run_id):
+    """One row per coin: what the free context sources returned, and how often the coin reached the alert rank."""
+    context = last_result(evidence, "get_market_context")
+    if not isinstance(context, dict) or "coins" not in context:
+        return []
+    stats = last_result(evidence, "get_alert_history_stats")
+    stats = stats.get("coins", {}) if isinstance(stats, dict) else {}
+    sentiment = context.get("sentiment") if sources.is_data(context.get("sentiment")) else {}
+    flags = ", ".join(context.get("flags", []))
+    rows = []
+    for coin, piece in context["coins"].items():
+        def part(name):
+            value = piece.get(name)
+            return value if sources.is_data(value) else {}
+        liq, der, iv, wide, check = part("liquidity"), part("derivatives"), part("implied_volatility"), part("market_wide"), part("price_check")
+        missing = [name for name in ("liquidity", "derivatives", "implied_volatility", "market_wide", "price_check") if not part(name)]
+        s = stats.get(coin, {})
+        rows.append([stamp, run_id, version, coin, liq.get("mid_price", ""), liq.get("spread_pct", ""),
+                     liq.get("bid_depth_usd", ""), liq.get("ask_depth_usd", ""), liq.get("depth_band_pct", ""),
+                     der.get("funding_rate_pct_per_hour", ""), der.get("funding_pays", ""), der.get("open_interest_usd_approx") or "",
+                     iv.get("implied_vol_pct", ""), "" if iv.get("rank_1y") is None else iv["rank_1y"],
+                     wide.get("volume_24h_usd", ""), wide.get("market_volume_ratio_30d", ""), wide.get("market_volume_rank", ""),
+                     check.get("coingecko_price_usd", ""), check.get("difference_pct", ""),
+                     sentiment.get("value", ""), sentiment.get("label", ""), s.get("share_pct", ""), s.get("episodes", ""),
+                     flags, "ok" if not missing else "partial: " + ", ".join(missing)])
+    return rows
+
+
 def publish_market_data(evidence, version):
     """The extra tabs show what the agent saw: the Kraken numbers per coin and the relationships between coins."""
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -509,6 +596,9 @@ def publish_market_data(evidence, version):
     rows = cross_rows(evidence, version, stamp, run_id)
     if rows:
         sheet_append("cross_asset", rows)
+    rows = context_rows(evidence, version, stamp, run_id)
+    if rows:
+        sheet_append("context_data", rows)
 
 
 # ==============================================================================================
@@ -581,6 +671,25 @@ TOOL_SPECS = {
         ),
         "params": {},
     },
+    "get_market_context": {
+        "description": (
+            "Market context for every watchlist coin from other free public sources: order-book liquidity "
+            "(spread, depth within 1%), the perpetual futures funding rate and who pays it, open interest, "
+            "implied volatility with its rank (BTC and ETH only), market-wide 24-hour volume with its rank "
+            "against its own history, a second price and whether the two prices agree, and the market-wide "
+            "fear and greed index. Any field may say 'unavailable'; never estimate it. 'flags' lists what is "
+            "unusual. Context only: it never raises an alert. Describe at most one or two facts of it."
+        ),
+        "params": {},
+    },
+    "get_alert_history_stats": {
+        "description": (
+            "How often each coin was at the alert rank in its own history (days ranked, alert days, share of "
+            "days, separate episodes, latest alert day), and the same for any coin. A base rate for context; "
+            "it never raises an alert."
+        ),
+        "params": {},
+    },
     "get_recent_decisions": {
         "description": (
             "Your own most recent decisions from the Sheet (time, alert, coins, message), oldest first. "
@@ -599,6 +708,8 @@ TOOL_SPECS = {
 TOOLS = {
     "get_market_summary": tool_market_summary,
     "get_cross_asset_summary": tool_cross_asset_summary,
+    "get_market_context": tool_market_context,
+    "get_alert_history_stats": tool_alert_history_stats,
     "get_recent_decisions": tool_recent_decisions,
     "search_playbook": tool_search_playbook,
 }
@@ -677,10 +788,10 @@ INTRO = ("You are a crypto market watch agent. This is for education only.\n"
 
 SYSTEM_PROMPT = INTRO + """
 How to work:
-1. Call get_market_summary for every watchlist coin, and get_cross_asset_summary once.
+1. Call get_market_summary for every watchlist coin, and get_cross_asset_summary, get_market_context and get_alert_history_stats once each.
 2. Call get_recent_decisions to see your own recent alerts.
 3. Call search_playbook for the rules that apply (alert rules, repeat alerts, wording rules, and the rule for each metric that looks unusual).
-4. Then give the final answer. Volume, relative strength and correlation are context: describe them, they never raise an alert alone.
+4. Then give the final answer. Volume, relative strength, correlation and the market context (liquidity, funding, implied volatility, market-wide volume, sentiment, the price check) are context: describe at most one or two facts of them, and they never raise an alert alone. When a context field says unavailable, say so and never estimate it.
 
 """ + RULES + "\n\n" + FORMAT
 
@@ -689,7 +800,7 @@ DECIDE_PROMPT = INTRO + "\nYou are given the evidence: everything the tools retu
 PLAN_PROMPT = INTRO + """
 Write the plan for today's work as ONLY a JSON object:
 {"steps": [{"tool": "...", "args": {...}, "reason": "..."}]}
-Rules: at most %d steps; use only the tools below; every coin must be one of the watchlist. The plan must contain one get_market_summary step for every watchlist coin, one get_cross_asset_summary step, one get_recent_decisions step, and playbook searches for the rules you will need: alert rules, repeat alerts, wording rules, and the rule for each metric. Plan the steps in a way that leaves room for all of them: one search query may name several rules, for example "alert rules repeat alerts wording".
+Rules: at most %d steps; use only the tools below; every coin must be one of the watchlist. The plan must contain one get_market_summary step for every watchlist coin, one get_cross_asset_summary step, one get_market_context step, one get_alert_history_stats step, one get_recent_decisions step, and playbook searches for the rules you will need: alert rules, repeat alerts, wording rules, and the rule for each metric. Plan the steps in a way that leaves room for all of them: one search query may name several rules, for example "alert rules repeat alerts wording".
 Tools:
 %s"""
 
@@ -737,7 +848,12 @@ def call_llm(messages, tools=None):
         if not response.ok:
             raise AgentError(f"Groq error {response.status_code}: {response.text[:300]}")
         STATS["llm_calls"] += 1
-        return response.json()["choices"][0]["message"]
+        body = response.json()
+        usage = body.get("usage")
+        used = usage.get("total_tokens") if isinstance(usage, dict) else None
+        if isinstance(used, int) and not isinstance(used, bool) and used > 0:
+            STATS["llm_tokens"] += used
+        return body["choices"][0]["message"]
     raise AgentError("Groq kept answering with a rate limit")
 
 
@@ -1033,9 +1149,15 @@ def main(argv=None):
     parser.add_argument("--publish", action="store_true", help="with --test: also write every scenario result to the scenarios tab")
     parser.add_argument("--measure", action="store_true", help="run all 4 versions several times")
     parser.add_argument("--runs", type=int, default=3, help="runs per version for --measure")
+    parser.add_argument("--check-sources", action="store_true",
+                        help="call every free data source once and print what came back (no AI, no tokens)")
     args = parser.parse_args(argv)
     use_reviewer = args.reviewer == "on"
     try:
+        if args.check_sources:
+            lines, failed = sources.check_sources(WATCHLIST, os.environ.get("COINGECKO_API_KEY", "").strip())
+            print("\n".join(lines))
+            return 1 if failed else 0
         if args.measure:
             import scenarios
             return scenarios.measure(args.runs)

@@ -23,6 +23,7 @@ import sys
 from datetime import datetime, timezone
 
 import agent
+import sources
 
 PLOTLY_URL = "https://cdn.plot.ly/plotly-2.35.2.min.js"
 LABELS = {"volatility": "30-day volatility", "distance": "Distance from 30-day average", "drawdown": "30-day max drawdown"}
@@ -91,22 +92,9 @@ def trigger_levels(closes):
     return levels
 
 
-def episodes(flags):
-    """How many separate runs of True a list has: three days in a row at the alert rank are one episode."""
-    return sum(1 for i, flag in enumerate(flags) if flag and (i == 0 or not flags[i - 1]))
-
-
-def base_rate(stamps, closes):
-    """How often the coin was at the alert rank on any of the three price metrics, each day ranked only against the days before it.
-    The first days are skipped until the history is as long as the agent needs (MIN_HISTORY_DAYS), so every day counted could have raised an alert."""
-    series, _ = agent.metric_series(closes)
-    first = agent.WINDOW + agent.MIN_HISTORY_DAYS - 1
-    days, flags = [], []
-    for i in range(first, len(closes)):
-        ranks = agent.ranks_at(series, i)
-        days.append(agent.format_date(stamps[i]))
-        flags.append(max(ranks.values()) >= agent.ALERT_RANK)
-    return {"days": days, "flags": flags, "ranked_days": len(flags), "alert_days": sum(flags), "episodes": episodes(flags)}
+# The base rate is computed in agent.py now (the get_alert_history_stats tool uses it); the brief shows the same numbers.
+episodes = agent.episodes
+base_rate = agent.base_rate
 
 
 def analyse(coin, stamps, closes, volumes=None):
@@ -157,6 +145,11 @@ def gather(now):
     return coins, cross_from(series)
 
 
+def gather_context():
+    """The same market context the agent reads (free sources, fail-soft). Never raises."""
+    return agent.tool_market_context()
+
+
 def fetch_decisions():
     try:
         body = agent.sheet_post({"action": "history", "limit": DECISION_ROWS, "detail": True})
@@ -189,6 +182,13 @@ def demo_coins():
 
 def demo_cross():
     return cross_from({coin: (stamps, closes) for coin, (stamps, closes, _) in demo_series().items()})
+
+
+def demo_context(coins=None):
+    """Sample context for the layout preview. Prices follow the synthetic closes so the page does not contradict itself."""
+    import scenarios                                   # only the preview needs the fake builder
+    closes = {c["coin"]: c["summary"]["last_close"] for c in (coins or demo_coins()) if "error" not in c}
+    return scenarios.fake_context(btc_mid=closes.get("BTC", 67210.5), mids=closes, iv_rank=96.5, btc_price_gap=0.3)
 
 
 def demo_decisions():
@@ -256,6 +256,9 @@ def headlines(data):
     cross = data.get("cross") or {}
     if cross.get("flags"):
         lines.append("Unusual relationships, context only: " + "; ".join(cross["flags"]) + " (each at an extreme of its own history, see the relationships table).")
+    context = data.get("context") or {}
+    if context.get("flags"):
+        lines.append("Market context, context only and never an alert on its own: " + "; ".join(context["flags"]) + " (see the market context table).")
     broken = [c for c in data["coins"] if "error" in c]
     if broken:
         lines.append("Data unavailable, so no statement is made for: " + ", ".join(c["coin"] for c in broken) + ".")
@@ -583,6 +586,76 @@ def context_section(data):
             f'Relative strength is a coin\'s 30-day return minus the group average.</p>{table}{pairs}</section>')
 
 
+def _usd(value):
+    """$14.2M, $6.8B, $950K: the dollar figures of the order book and open interest are read at a glance."""
+    for limit, suffix in ((1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if abs(value) >= limit:
+            return f"${value / limit:,.1f}{suffix}"
+    return f"${value:,.0f}"
+
+
+def _missing(piece, fallback="unavailable"):
+    reason = piece.get("unavailable", fallback) if isinstance(piece, dict) else fallback
+    return f'<span class="muted">unavailable: {esc(reason)}</span>'
+
+
+def market_context_section(data):
+    """What the other free sources say about each coin today. Description only: none of it raises an alert."""
+    context = data.get("context") or {}
+    if "error" in context or not context.get("coins"):
+        if context.get("error"):
+            return f'<section class="card"><h2>Market context<span class="chip code">COMPUTED BY CODE</span></h2><p class="sub">Unavailable: {esc(context["error"])}.</p></section>'
+        return ""
+    rows = []
+    for coin, piece in context["coins"].items():
+        liq, der, iv, wide, check = (piece.get(k) for k in ("liquidity", "derivatives", "implied_volatility", "market_wide", "price_check"))
+        if sources.is_data(liq):
+            liq_html = (f'spread {liq["spread_pct"]:.4f}%<br><span class="muted">bid {_usd(liq["bid_depth_usd"])} / '
+                        f'ask {_usd(liq["ask_depth_usd"])} within {liq["depth_band_pct"]:g}% of the price</span>')
+        else:
+            liq_html = _missing(liq)
+        if sources.is_data(der):
+            oi = _usd(der["open_interest_usd_approx"]) if der.get("open_interest_usd_approx") else f'{der["open_interest"]:,.0f} contracts'
+            der_html = (f'{der["funding_rate_pct_per_hour"]:+.4f}% per hour<br><span class="muted">{esc(der["funding_pays"])}, open interest {oi}</span>')
+        else:
+            der_html = _missing(der)
+        if sources.is_data(iv):
+            rank = rank_cell(iv["rank_1y"]) if iv.get("rank_1y") is not None else f'<span class="muted">no rank yet ({iv["history_days"]} days)</span>'
+            iv_html = f'{iv["implied_vol_pct"]:.1f}% annualised<br>{rank} <span class="muted">vs past year</span>'
+        else:
+            iv_html = _missing(iv)
+        if sources.is_data(wide) and "market_volume_rank" in wide:
+            wide_html = (f'{_usd(wide["volume_24h_usd"])} in 24h<br>{wide["market_volume_ratio_30d"]:.2f}x its 30-day average '
+                         f'{rank_cell(wide["market_volume_rank"])}')
+        elif sources.is_data(wide):
+            wide_html = f'{_usd(wide["volume_24h_usd"])} in 24h<br>{_missing({"unavailable": wide.get("volume_history", "history unavailable")})}'
+        else:
+            wide_html = _missing(wide)
+        if sources.is_data(check):
+            tone = "lo" if check["agree"] else "hi"
+            check_html = (f'<span class="rank {tone}">{check["difference_pct"]:+.2f}%</span> '
+                          f'<span class="muted">{"agree" if check["agree"] else "differ"}</span><br>'
+                          f'<span class="muted">Kraken {_price(check["kraken_mid_usd"])} vs CoinGecko {_price(check["coingecko_price_usd"])}</span>')
+        else:
+            check_html = _missing(check)
+        rows.append(f'<tr><td><b>{esc(coin)}</b></td><td>{liq_html}</td><td>{der_html}</td><td>{iv_html}</td><td>{wide_html}</td><td>{check_html}</td></tr>')
+    table = ('<table><tr><th>Coin</th><th>Liquidity (Kraken order book)</th><th>Funding and open interest (Kraken Futures)</th>'
+             '<th>Implied volatility (Deribit DVOL)</th><th>Market-wide volume (CoinGecko)</th><th>Price check</th></tr>' + "".join(rows) + "</table>")
+    fng = context.get("sentiment")
+    if sources.is_data(fng):
+        mood = (f'<p class="sub" style="margin-top:14px"><b>Fear and greed index (whole market):</b> {fng["value"]} of 100, {esc(fng["label"])}; '
+                f'{fng["change_vs_yesterday"]:+d} since yesterday, 30-day mean {fng["mean_prior_30d"]:.0f}.</p>')
+    else:
+        mood = f'<p class="sub" style="margin-top:14px"><b>Fear and greed index:</b> {_missing(fng)}</p>'
+    flags = context.get("flags") or []
+    flag_html = (f'<p class="sub"><b>Unusual today:</b> {esc("; ".join(flags))}.</p>' if flags
+                 else '<p class="sub"><b>Unusual today:</b> nothing among the sources that responded.</p>')
+    return ('<section class="card"><h2>Market context: liquidity, derivatives, implied volatility, sentiment<span class="chip code">COMPUTED BY CODE</span></h2>'
+            '<p class="sub">Extra free sources that describe how the market is positioned. They are context only: they never raise an alert, and a field that cannot be read says so '
+            'instead of being estimated. A positive funding rate means longs pay shorts. Implied volatility is what option prices imply, not a forecast.</p>'
+            f'{table}{mood}{flag_html}</section>')
+
+
 def _price(value):
     return f"${value:,.2f}" if value >= 100 else f"${value:,.4f}"
 
@@ -711,6 +784,7 @@ def build_html(data):
 <p class="sub">Each value is followed by its rank (0 to 100) against that coin's own history. Red is at or above {agent.ALERT_RANK:g}, amber is {NEAR_RANK:g} to below {agent.ALERT_RANK:g}.</p>{snapshot_table(data)}</section>
 {charts_html}
 {context_section(data)}
+{market_context_section(data)}
 {base_rate_section(data)}
 {ai_section(data)}
 <section class="card"><h2>What to watch at the next review<span class="chip watch">MONITORING TRIGGERS, NOT FORECASTS</span></h2><ul class="clean">{watch}</ul></section>
@@ -722,7 +796,9 @@ def build_html(data):
 <span><span class="chip ai">WRITTEN BY AI</span> the analysis text</span>
 <span><span class="chip check">CHECKED BY CODE</span> guardrails on the AI's decision</span></div></section>
 <footer><b>Education only. Not financial advice.</b> This report contains no price forecast and makes no recommendation. Thresholds are descriptive conventions
-(rank {agent.ALERT_RANK:g}, 30-day window, daily candles), documented with reasons in playbook.md. Market data: Kraken public OHLC API.
+(rank {agent.ALERT_RANK:g}, 30-day window, daily candles), documented with reasons in playbook.md. Price data: Kraken public OHLC API.
+Market context, where available: Kraken order book and Kraken Futures, Deribit volatility index (DVOL), market-wide volume and prices from
+<a href="https://www.coingecko.com/en/api">CoinGecko API</a>, and the Fear and Greed Index from <a href="https://alternative.me/crypto/fear-and-greed-index/">alternative.me</a>.
 Generated by the Crypto Watch Agent from its own tools; see the repository README for the method and guardrails.</footer>
 </main>{chart_script(charts(data))}</body></html>"""
 
@@ -784,11 +860,13 @@ def main(argv=None):
     now = datetime.now(timezone.utc)
     if args.demo:
         coins, cross = demo_coins(), demo_cross()
+        context = demo_context(coins)
         decisions, note = demo_decisions()
     else:
         coins, cross = gather(now)
+        context = gather_context()
         decisions, note = fetch_decisions()
-    data = {"coins": coins, "cross": cross, "decisions": decisions, "decisions_note": note, "demo": args.demo,
+    data = {"coins": coins, "cross": cross, "context": context, "decisions": decisions, "decisions_note": note, "demo": args.demo,
             "generated": now.strftime("%Y-%m-%d %H:%M")}
     page = build_html(data)
     with open(args.out, "w", encoding="utf-8") as handle:

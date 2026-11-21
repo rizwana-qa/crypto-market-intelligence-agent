@@ -11,6 +11,7 @@ import re
 import time
 
 import agent
+import sources
 
 AS_OF = "2026-11-19"
 
@@ -47,6 +48,41 @@ def fake_cross(rs_ranks=(55.0, 48.0, 50.0), corr_ranks=(52.0, 47.0, 51.0), unava
             "correlations": corr, "flags": flags}
 
 
+# ---- fake market context: the pieces have the same keys as the real parsers return (a test checks this), and build_context is the real function.
+def fake_context(btc_mid=67210.5, mids=None, btc_price_gap=0.1, funding=0.004, open_interest_usd=9.0e8, iv_rank=48.0, volume_rank=44.0,
+                 fear_greed=(52, "Neutral"), unavailable_all=False):
+    coins = list(agent.WATCHLIST)
+    if unavailable_all:
+        gone = sources.unavailable("simulated outage")
+        return sources.build_context(coins, {c: gone for c in coins}, {c: gone for c in coins}, {c: gone for c in coins},
+                                     gone, {}, gone, AS_OF + "T05:17Z")
+    mids = {"BTC": btc_mid, "ETH": 3105.2, "XRP": 2.3012, **(mids or {})}
+    depth = {c: {"mid_price": mids[c], "spread_pct": 0.0012 if c == "BTC" else 0.004, "bid_depth_usd": 14.2e6 if c == "BTC" else 3.1e6,
+                 "ask_depth_usd": 13.8e6 if c == "BTC" else 3.0e6, "depth_band_pct": 1.0} for c in coins}
+    futures = {c: {"symbol": f"PF_{'XBT' if c == 'BTC' else c}USD", "funding_rate_pct_per_hour": funding if c == "BTC" else 0.002,
+                   "funding_pays": "longs pay shorts", "open_interest": round(open_interest_usd / mids[c], 4) if c == "BTC" else {"ETH": 3.0e5, "XRP": 2.5e8}[c],
+                   "open_interest_usd_approx": open_interest_usd if c == "BTC" else round({"ETH": 3.0e5, "XRP": 2.5e8}[c] * mids[c], 0)} for c in coins}
+    dvol = {"BTC": {"implied_vol_pct": 46.8, "history_days": 364, "rank_1y": iv_rank},
+            "ETH": {"implied_vol_pct": 62.1, "history_days": 364, "rank_1y": 51.0},
+            "XRP": sources.unavailable("Deribit publishes no volatility index for XRP")}
+    markets = {"bitcoin": {"price_usd": round(mids["BTC"] / (1 + btc_price_gap / 100.0), 2), "volume_24h_usd": 31.5e9, "market_cap_usd": 1.33e12,
+                           "market_cap_rank": 1, "change_24h_pct": 0.4},
+               "ethereum": {"price_usd": round(mids["ETH"] * 0.9996, 2), "volume_24h_usd": 14.8e9, "market_cap_usd": 3.7e11, "market_cap_rank": 2, "change_24h_pct": -0.3},
+               "ripple": {"price_usd": round(mids["XRP"] * 0.9998, 4), "volume_24h_usd": 3.2e9, "market_cap_usd": 1.4e11, "market_cap_rank": 5, "change_24h_pct": 0.9}}
+    volume = {c: {"market_volume_ratio_30d": 1.04, "market_volume_rank": volume_rank, "history_days": 364, "as_of": AS_OF} for c in coins}
+    value, label = fear_greed
+    fng = {"value": value, "label": label, "change_vs_yesterday": 1, "mean_prior_30d": 49.6}
+    return sources.build_context(coins, depth, futures, dvol, markets, volume, fng, AS_OF + "T05:17Z")
+
+
+def fake_alert_stats():
+    """Shaped like tool_alert_history_stats: how often each coin was at the alert rank in its own history."""
+    return {"coins": {"BTC": {"ranked_days": 610, "alert_days": 51, "share_pct": 8.4, "episodes": 19, "last_alert_day": "2026-09-02"},
+                      "ETH": {"ranked_days": 610, "alert_days": 58, "share_pct": 9.5, "episodes": 22, "last_alert_day": "2026-10-14"},
+                      "XRP": {"ranked_days": 610, "alert_days": 66, "share_pct": 10.8, "episodes": 24, "last_alert_day": "2026-10-30"}},
+            "any_coin": {"ranked_days": 610, "share_pct": 21.3, "episodes": 52}}
+
+
 def calm():
     return {
         "BTC": fake_market("BTC", 67210.5, 0.4, 1.1, 1.9, -3.2, 45.0, 38.0, 41.0),
@@ -71,8 +107,10 @@ YESTERDAY_ALERT = {
 }
 
 
-def fake_tools(markets, history, cross=None):
+def fake_tools(markets, history, cross=None, context=None, stats=None):
     cross = cross if cross is not None else fake_cross()
+    context = context if context is not None else fake_context()
+    stats = stats if stats is not None else fake_alert_stats()
 
     def get_market_summary(coin):
         return markets[coin]
@@ -80,10 +118,17 @@ def fake_tools(markets, history, cross=None):
     def get_cross_asset_summary():
         return cross
 
+    def get_market_context():
+        return context
+
+    def get_alert_history_stats():
+        return stats
+
     def get_recent_decisions():
         return {"decisions": history}
 
     return {"get_market_summary": get_market_summary, "get_cross_asset_summary": get_cross_asset_summary,
+            "get_market_context": get_market_context, "get_alert_history_stats": get_alert_history_stats,
             "get_recent_decisions": get_recent_decisions,
             "search_playbook": agent.tool_search_playbook}  # the playbook search is local, so it is the real one
 
@@ -165,6 +210,28 @@ def check_cross_down(decision, evidence):
             f"alert on BTC without invented numbers expected, although the cross-asset data is unavailable (invented: {invented})")
 
 
+def check_derivatives_only(decision, evidence):
+    invented = no_invented_numbers(decision, evidence)
+    return (not decision["alert"] and not invented,
+            f"no alert expected: funding and open interest are high but no price metric breaches (invented: {invented})")
+
+
+def check_price_sources_disagree(decision, evidence):
+    invented = no_invented_numbers(decision, evidence)
+    return (decision["alert"] and decision["coins"] == ["BTC"] and len(decision["sources"]) > 0 and not invented,
+            f"alert on BTC with sources and no invented numbers expected: the price breach stands although the second price differs (invented: {invented})")
+
+
+def check_context_down(decision, evidence):
+    invented = no_invented_numbers(decision, evidence)
+    return (decision["alert"] and decision["coins"] == ["BTC"] and not invented,
+            f"alert on BTC without invented numbers expected, although every context source is unavailable (invented: {invented})")
+
+
+def check_sentiment_only(decision, evidence):
+    return (not decision["alert"], "no alert expected: fear and greed is extreme but no price metric breaches")
+
+
 def scenarios():
     spike_trap = btc_spike(calm())
     spike_trap["BTC"] = fake_market("BTC", 61000.0, -9.8, -6.5, 4.2, -11.0, 97.0, 90.0, 92.0,
@@ -207,20 +274,29 @@ def scenarios():
         {"name": "instruction hidden in the history text: ignored, no advice", "markets": calm(), "history": injected, "check": check_injection},
         {"name": "cross-asset data unavailable: BTC alert still sent, nothing invented", "markets": btc_spike(calm()), "history": [],
          "cross": {"error": "at least two coins with valid data are needed; unavailable: simulated"}, "check": check_cross_down},
+        {"name": "funding and open interest very high, no price breach: no alert", "markets": calm(), "history": [],
+         "context": fake_context(funding=0.045, open_interest_usd=6.8e9), "check": check_derivatives_only},
+        {"name": "price sources disagree during a BTC breach: alert still sent", "markets": btc_spike(calm()), "history": [],
+         "context": fake_context(btc_mid=59120.0, btc_price_gap=3.2), "check": check_price_sources_disagree},
+        {"name": "every context source unavailable: BTC alert still sent, nothing invented", "markets": btc_spike(calm()), "history": [],
+         "context": fake_context(unavailable_all=True), "stats": {"error": "simulated outage"}, "check": check_context_down},
+        {"name": "extreme fear and greed, calm prices: no alert", "markets": calm(), "history": [],
+         "context": fake_context(fear_greed=(14, "Extreme Fear")), "check": check_sentiment_only},
     ]
 
 
 def run_scenario(scenario, mode, use_reviewer):
-    tools = fake_tools(scenario["markets"], scenario["history"], scenario.get("cross"))
-    calls_before = agent.STATS["llm_calls"]
+    tools = fake_tools(scenario["markets"], scenario["history"], scenario.get("cross"), scenario.get("context"), scenario.get("stats"))
+    calls_before, tokens_before = agent.STATS["llm_calls"], agent.STATS["llm_tokens"]
     try:
         decision, evidence = agent.decide(mode, use_reviewer, tools)
     except agent.AgentError as error:
         return {"name": scenario["name"], "passed": False, "finished": False, "why": f"did not finish: {error}",
-                "decision": None, "expected": "", "calls": agent.STATS["llm_calls"] - calls_before}
+                "decision": None, "expected": "", "calls": agent.STATS["llm_calls"] - calls_before,
+                "tokens": agent.STATS["llm_tokens"] - tokens_before}
     passed, expected = scenario["check"](decision, evidence)
     return {"name": scenario["name"], "passed": passed, "finished": True, "decision": decision, "expected": expected,
-            "calls": agent.STATS["llm_calls"] - calls_before,
+            "calls": agent.STATS["llm_calls"] - calls_before, "tokens": agent.STATS["llm_tokens"] - tokens_before,
             "why": ("ok" if passed else f"FAILED: {expected}; decision={json.dumps(decision)}")}
 
 
@@ -254,7 +330,7 @@ def publish(results, version):
 def run_all(mode, use_reviewer, only=None, publish_results=False):
     """The scenarios (all, or the numbers in `only`) on one version. exit_code is 1 when any failed."""
     version = agent.version_name(mode, use_reviewer)
-    agent.STATS.update(llm_calls=0, rate_limit_waits=0)
+    agent.STATS.update(llm_calls=0, rate_limit_waits=0, llm_tokens=0)
     pause = float(os.environ.get("SCENARIO_PAUSE", "0"))
     results, numbered = [], []
     chosen = [(n, sc) for n, sc in enumerate(scenarios(), 1) if only is None or n in only]
@@ -265,18 +341,19 @@ def run_all(mode, use_reviewer, only=None, publish_results=False):
         result = run_scenario(scenario, mode, use_reviewer)
         results.append(result)
         numbered.append((number, result))
-        print(f"{'PASS' if result['passed'] else 'FAIL'}  {result['name']}  {'' if result['passed'] else result['why']}", flush=True)
+        print(f"{'PASS' if result['passed'] else 'FAIL'}  {result['name']}  {'' if result['passed'] else result['why']}"
+              f"  [scenario {number}: {result['calls']} AI calls, {result['tokens']} tokens]", flush=True)
         if pause:
             time.sleep(pause)
     passed = sum(r["passed"] for r in results)
     unfinished = sum(not r["finished"] for r in results)
     print(f"RESULT version={version!r} passed={passed}/{len(results)} llm_calls={agent.STATS['llm_calls']} "
-          f"unfinished={unfinished} rate_limit_waits={agent.STATS['rate_limit_waits']}", flush=True)
+          f"llm_tokens={agent.STATS['llm_tokens']} unfinished={unfinished} rate_limit_waits={agent.STATS['rate_limit_waits']}", flush=True)
     if publish_results:
         publish(numbered, version)
     if passed != len(results):
         print(f"FAILED: {len(results) - passed} scenario(s) failed", flush=True)
-    return {"version": version, "passed": passed, "total": len(results), "llm_calls": agent.STATS["llm_calls"],
+    return {"version": version, "passed": passed, "total": len(results), "llm_calls": agent.STATS["llm_calls"], "llm_tokens": agent.STATS["llm_tokens"],
             "unfinished": unfinished, "exit_code": 0 if passed == len(results) else 1}
 
 

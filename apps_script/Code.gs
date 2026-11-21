@@ -18,6 +18,9 @@
  *   EMAIL_TO        optional; defaults to the account that owns this script
  *
  * Every reply is JSON: {success: true, ...} or {success: false, error: "CODE"}. Replies never contain the key.
+ * Run IDs: when a save or an append carries a run ID that is already in that tab's Run ID column (a GitHub "Re-run jobs"
+ * keeps the same run ID), nothing is written and no email is sent, and the reply is {success: true, duplicate: true}.
+ * A payload with no run ID, or with the default "local", is never treated as a duplicate.
  * Cells are written as text, so a message that starts with "=" is never run as a formula.
  */
 
@@ -30,6 +33,8 @@ const MAX_TEXT_CHARS = 1000;
 const MAX_HISTORY_ROWS = 20;
 const MIN_KEY_LENGTH = 16;
 const MAX_APPEND_ROWS = 60;
+const NO_RUN_ID = 'local';   // what agent.py sends when GITHUB_RUN_ID is not set; it is not a real run, so it is never a duplicate
+const LOCK_WAIT_MS = 30000;
 // The extra tabs. The header row is written once, when the tab is created. Rows must have exactly this many cells.
 const EXTRA_TABS = {
   market_data: ['Time (UTC)', 'Run ID', 'Version', 'Coin', 'As of (UTC day)', 'Last close (USD)', 'Daily return %',
@@ -86,6 +91,32 @@ function clean_(value) {
   return String(value === null || value === undefined ? '' : value).slice(0, MAX_TEXT_CHARS);
 }
 
+// The run ID to guard, or '' when the payload has none (empty, or the "local" default).
+function runKey_(value) {
+  const id = clean_(value).trim();
+  return id === NO_RUN_ID ? '' : id;
+}
+
+// Runs work() with the script lock taken when there is a run ID, so two calls with the same run ID cannot both pass the check.
+function withRunLock_(runId, work) {
+  if (!runId) return work();
+  const lock = LockService.getScriptLock();
+  lock.waitLock(LOCK_WAIT_MS);
+  try {
+    return work();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// True when the tab already has this run ID. Reads only the Run ID column (the header row is skipped).
+function hasRunId_(sheet, headers, runId) {
+  const last = sheet.getLastRow();
+  if (last < 2) return false;
+  const column = headers.indexOf('Run ID') + 1;
+  return sheet.getRange(2, column, last - 1, 1).getValues().some(function (r) { return String(r[0]).trim() === runId; });
+}
+
 function sheet_(props) {
   const id = String(props.getProperty('SPREADSHEET_ID') || '').trim();
   const spreadsheet = SpreadsheetApp.openById(id);
@@ -134,24 +165,28 @@ function save_(request, props) {
     request.coins.map(clean_).join(', '), clean_(request.message), request.sources.map(clean_).join(' | '),
     clean_(request.reasoning), clean_(request.blocked_reason),
   ];
-  const sheet = sheet_(props);
-  const rowNumber = sheet.getLastRow() + 1;
-  sheet.getRange(rowNumber, 1, 1, HEADERS.length).setNumberFormat('@').setValues([row]);
-  SpreadsheetApp.flush();
+  const runId = runKey_(row[2]);
+  return withRunLock_(runId, function () {
+    const sheet = sheet_(props);
+    if (runId && hasRunId_(sheet, HEADERS, runId)) return { success: true, duplicate: true };
+    const rowNumber = sheet.getLastRow() + 1;
+    sheet.getRange(rowNumber, 1, 1, HEADERS.length).setNumberFormat('@').setValues([row]);
+    SpreadsheetApp.flush();
 
-  let emailed = false;
-  if (request.alert) {
-    const to = String(props.getProperty('EMAIL_TO') || '').trim() || Session.getEffectiveUser().getEmail();
-    MailApp.sendEmail({
-      to: to,
-      subject: 'Crypto watch alert: ' + row[4],
-      body: row[5] + '\n\nCoins: ' + row[4] + '\nSources: ' + row[6] + '\nRun: ' + row[2] + ' (' + row[1] + ')\n\n' +
-            'This project is for education only and is not financial advice.',
-      name: 'Crypto Watch Agent',
-    });
-    emailed = true;
-  }
-  return { success: true, row: rowNumber, emailed: emailed };
+    let emailed = false;
+    if (request.alert) {
+      const to = String(props.getProperty('EMAIL_TO') || '').trim() || Session.getEffectiveUser().getEmail();
+      MailApp.sendEmail({
+        to: to,
+        subject: 'Crypto watch alert: ' + row[4],
+        body: row[5] + '\n\nCoins: ' + row[4] + '\nSources: ' + row[6] + '\nRun: ' + row[2] + ' (' + row[1] + ')\n\n' +
+              'This project is for education only and is not financial advice.',
+        name: 'Crypto Watch Agent',
+      });
+      emailed = true;
+    }
+    return { success: true, row: rowNumber, emailed: emailed };
+  });
 }
 
 // The executive brief: the brief itself as the email body and the full interactive page as an attachment.
@@ -196,18 +231,23 @@ function append_(request, props) {
     if (!Array.isArray(row) || row.length !== headers.length) return { success: false, error: 'INVALID_PAYLOAD' };
     rows.push(row.map(cell_));
   }
-  const spreadsheet = SpreadsheetApp.openById(String(props.getProperty('SPREADSHEET_ID') || '').trim());
-  let sheet = spreadsheet.getSheetByName(request.tab);
-  if (!sheet) {
-    sheet = spreadsheet.insertSheet(request.tab);
-    sheet.appendRow(headers);
-    sheet.setFrozenRows(1);
-    sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
-  }
-  const first = sheet.getLastRow() + 1;
-  sheet.getRange(first, 1, rows.length, headers.length).setValues(rows);
-  SpreadsheetApp.flush();
-  return { success: true, added: rows.length, first_row: first };
+  // All rows of one request come from one run, so the first row's Run ID stands for the request.
+  const runId = runKey_(rows[0][headers.indexOf('Run ID')]);
+  return withRunLock_(runId, function () {
+    const spreadsheet = SpreadsheetApp.openById(String(props.getProperty('SPREADSHEET_ID') || '').trim());
+    let sheet = spreadsheet.getSheetByName(request.tab);
+    if (!sheet) {
+      sheet = spreadsheet.insertSheet(request.tab);
+      sheet.appendRow(headers);
+      sheet.setFrozenRows(1);
+      sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
+    }
+    if (runId && hasRunId_(sheet, headers, runId)) return { success: true, duplicate: true };
+    const first = sheet.getLastRow() + 1;
+    sheet.getRange(first, 1, rows.length, headers.length).setValues(rows);
+    SpreadsheetApp.flush();
+    return { success: true, added: rows.length, first_row: first };
+  });
 }
 
 // Run this ONCE from the editor (Run > authorizeOnce) to grant the Sheet and email permissions.

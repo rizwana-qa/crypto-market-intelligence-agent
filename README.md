@@ -6,7 +6,7 @@ Densight Labs AI Masterclass, Assignments 2 and 3: Build a Crypto Watch Agent.
 
 A daily market-intelligence agent for BTC/USD, ETH/USD and XRP/USD. It reads the latest completed daily candle from Kraken, ranks every measure against the coin's own history, adds market context from five more free sources, and decides whether anything deserves an alert. The AI recommends. Code validates the data, calculates every number, and has the last word.
 
-Contents: [Question and coverage](#question-and-coverage) | [Data sources](#data-sources-at-a-glance) | [How it works](#how-it-works) | [Data fetched and saved](#data-fetched-and-saved) | [Data validation](#data-validation) | [Fetch-data scenarios](#fetch-data-scenarios-and-traceability) | [Alert rule and thresholds](#alert-rule-and-thresholds) | [Guardrails](#guardrails) | [Testing](#testing) | [Verification status](#verification-status) | [Token budget](#token-budget-for-scenario-runs) | [Results and conclusion](#results-and-conclusion) | [Executive brief](#executive-intelligence-brief) | [Run it](#run-it-from-a-fresh-clone) | [Files](#files) | [Evidence still to attach](#evidence-still-to-attach-before-submission)
+Contents: [Question and coverage](#question-and-coverage) | [Data sources](#data-sources-at-a-glance) | [How it works](#how-it-works) | [Data fetched and saved](#data-fetched-and-saved) | [Data validation](#data-validation) | [Fetch-data scenarios](#fetch-data-scenarios-and-traceability) | [Alert rule and thresholds](#alert-rule-and-thresholds) | [Guardrails](#guardrails) | [Testing](#testing) | [Verification status](#verification-status) | [Token budget](#token-budget-for-scenario-runs) | [Results and conclusion](#results-and-conclusion) | [Executive brief](#executive-intelligence-brief) | [Ask page](#ask-page-rag-over-the-playbook) | [Run it](#run-it-from-a-fresh-clone) | [Files](#files) | [Evidence still to attach](#evidence-still-to-attach-before-submission)
 
 ## Question and coverage
 
@@ -108,6 +108,8 @@ Free sources -> market context tool (code) -----------\
 Sheet  -> memory tools (code) -------------------------> AI (Groq) -> draft JSON -> [reviewer] -> GUARDRAILS (code) -> Sheet rows + email
 playbook.md -> search tool (code) --------------------/
 ```
+
+**The daily chain.** One scheduled run does everything in order: fetch the data from the free sources, validate and rank it (code), run the agent (reviewer off by default, see Results), save the decision to the Sheet, then the `Executive report` workflow builds the interactive brief and sends one email, then checks the Ask page's playbook index. The Ask page itself is a separate program that runs on your own computer.
 
 ### The six tools
 
@@ -425,15 +427,17 @@ All in code, applied after the AI answers.
 
 ## Testing
 
-### Offline tests: 286, no AI and no network
+### Offline tests: 367, no AI and no network
 
-A scripted AI gives the same answers every time, so these are exact. `python tests/<file> -v` runs each one, and the `Tests` workflow runs all eight on every push that changes code or the playbook.
+A scripted AI gives the same answers every time, so these are exact. `python tests/<file> -v` runs each one, and the `Tests` workflow runs all ten on every push that changes code or the playbook.
 
 | File | Tests | What it proves |
 |---|---|---|
 | `tests/test_guardrails.py` | 53 | The agent loop, planner, reviewer and every guardrail, with hand-calculated metrics |
 | `tests/test_context.py` | 34 | The new metrics, the rule that context never alerts alone, the Sheet tab widths against `Code.gs` |
-| `tests/test_report.py` | 31 | The executive brief: numbers, trigger levels (each level is put in as the next close and the metric recomputed, and it lands on the target), labelling of who wrote what |
+| `tests/test_report.py` | 41 | The executive brief: numbers, trigger levels (each level is put in as the next close and the metric recomputed, and it lands on the target), labelling of who wrote what, the top 3 headlines on the page, the credit line, charts, the email and its subject |
+| `tests/test_insights.py` | 18 | The event study checked by hand on small series, the exact top 3 headlines and subject lines for the 20 November numbers, no advice word in any subject (a forced bad phrase falls back to a plain count) |
+| `tests/test_rag.py` | 53 | The Ask page: all retrieval checks, the guardrails on scripted AI answers (invented section, section not retrieved, advice wording, bad JSON, failed call), declined requests never reach the AI, and the local server (Host, Origin, content type, size, rate limit, no key in any reply, no text into HTML) |
 | `tests/test_sources.py` | 59 | Each parser on a sample reply, checked by hand (order-book depth, funding units, DVOL and volume ranks, the 1% price tolerance); an error never contains a key; every source down still gives a complete context; the fakes have the same fields as the real parsers |
 | `tests/test_export.py` | 18 | The CSV export: all 8 Kraken values kept, full price digits, factors equal the agent's own summary, the features file agrees with the factors file, nothing written when a coin fails |
 | `tests/test_validate.py` | 32 | The data validation: the 43 injected faults, the CoinGecko comparison, the cross-coin check, the report |
@@ -482,7 +486,7 @@ What has been proved, and how. Dates are 2026-11-21 unless stated.
 
 | What | Status | Evidence |
 |---|---|---|
-| 286 offline tests | Pass locally. The `Tests` workflow runs them on the next code push | Local runs |
+| 367 offline tests | Pass locally. The `Tests` workflow runs them on the next code push | Local runs |
 | Each free source on live data | Verified, all five context sources answered for all three coins | [44842220066](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44842220066), depth fix [44842558674](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44842558674) |
 | Kraken data export and factors on live data | Verified | [44848783647](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44848783647) |
 | Data validation on live data | Verified: 47 PASS, 1 WARN (real event), 0 FAIL. With the cross-coin check: 49 checks, 48 PASS, 1 WARN, 0 FAIL | [44849463885](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44849463885), [44852768752](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44852768752) |
@@ -492,7 +496,9 @@ What has been proved, and how. Dates are 2026-11-21 unless stated.
 | Real AI, scenarios 8 and 10 to 16 | Not run. Scenario 10 started and hit Groq's daily cap | |
 | Full agent on live data, six tools, new Sheet tabs | Not yet confirmed. Happens at the first daily run after pull request 2 (scheduled 05:17 UTC on 2026-11-21) | Update this row from the run log |
 | Full agent on live data, four-tool version | Verified 2026-11-20: alert for BTC and XRP, Sheet row saved, email sent | See Sample output |
-| Executive brief on live data | Verified: the workflow ran and sent the email | `Executive report` workflow |
+| Executive brief on live data, earlier layout | Verified: the workflow ran and sent the email | `Executive report` workflow |
+| New interactive brief, top 3 headlines, outlook, impactful subject | Verified offline and in real Chrome (desktop and 390 px). Also run end to end through `report.main` on the real exported Kraken candles (no network): the ranks, headlines, event-study figures and the subject match the 20 November numbers. With Kraken unreachable it builds a plain "data unavailable" page and subject instead of failing. Not yet on a live run: that happens at the first daily run after the pull request is merged | Tests, screenshots |
+| Ask page | Verified offline: 53 tests, 8 deliberate breaks of the guardrails and the server all caught, and a real Chrome run (ask, cite, decline, copy, phone width). Not yet run with the real AI | Tests |
 | Planner, with the real AI | 6 of 7 on scenarios 1 to 7. The fix was not re-run | [44740770242](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44740770242) |
 | Reviewer versions, with the real AI | No result (the one run was cancelled by the rate limit) | [44741524858](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44741524858) |
 
@@ -546,20 +552,41 @@ The scenarios use fake market data and fake tool replies with the real AI, not l
 
 ## Executive intelligence brief
 
-`report.py` builds a one-page HTML brief for decision makers, and the `Executive report` workflow emails it after every successful daily run.
+`report.py` builds an interactive HTML brief. The `Executive report` workflow emails it once a day, right after a successful daily run, so one run gives one email.
 
-- **What it shows:** a banner and status, the question the agent answers, headlines, a per-coin snapshot with ranks, three charts (price indexed to 100, a rank heatmap with the price measures that can alert next to the context measures, and how unusual each coin has been over 60 days), a context section (trend, volume, relative strength, correlation between coins), a market context section (liquidity, funding and open interest, implied volatility, market-wide volume, price check, fear and greed, with source attribution in the footer), how often each coin reached the alert rank in its own history, the AI's analysis, what to watch, conditional watch scenarios with trigger levels, the decision history from the Sheet, and what the agent does in each situation.
+- **Email subject.** Written by code from that day's numbers and naming the strongest signal, for example `Crypto Watch ALERT: 3 coins breach their own history, BTC closes 20.46% below its 30-day average` (that is the 20 November close). A calm day reads `Crypto Watch: calm market, no coin at its alert rank (closest ETH, rank 88)`. If a subject would contain an advice word it falls back to a plain count, and a test checks it. On an alert day the Sheet web app also sends its own short alert email, so those days bring two emails.
+- **What it shows, in order:** a header with the status and a ticker, the headline and deck (how rare the reading is in the coin's own history, counted from that history), **the top 3 headlines**, stat tiles, interactive charts, the AI's analysis, **what the history says** (below), five questions the data raises, everything the code found, a per-coin snapshot with ranks, the context sections (trend, volume, relative strength, correlation, liquidity, funding and open interest, implied volatility, market-wide volume, price check, Fear and Greed), how often each coin reached the alert rank, what to watch, conditional watch scenarios with trigger levels, the decision history and a legend. The footer says "Created by Rizwana Zahoor" and "Not investment advice".
+- **Interactive charts (plotly.js).** Hover for values, drag to zoom, double-click to reset, click a legend entry to hide a coin. Tabs switch the range: price 60, 120 or 240 days, ranks 30, 60 or 90 days. The charts are distance from the 30-day average, price indexed to 100, the rank heatmap with the alert and near-threshold lines, how unusual each coin has been over time, how many days the alert rank lasts, and where prices went afterwards. The email has no charts: it carries the top 3 headlines, the stat strip and the AI's analysis, and the full interactive page is attached as `crypto-watch-executive-brief.html`.
+- **What the history says.** An event study over each coin's own history: how long a run at the alert rank lasts and how likely the rank is to be there again k days later, and the coin's return 7, 14 and 30 days after a run starts, against any day. On the 720 days to 2026-11-20 (601 ranked days per coin) there were 20 episodes. The rank was at the alert level again the next day 90.5% of the time and 7 days later 53.3%; a run lasted 7 days at the median (mean 9.1, longest 35). Thirty days after a run started, the median return was +2.4% and the middle half of outcomes ran from -7.1% to +14.7% (17 episodes). The page's headline for this is chosen from those numbers (for example "Stress is sticky. Direction is not."). The page shows the sample size next to every statistic and prints four caveats: a small sample, coins that breach together (so fewer independent events), one stretch of the market, and no fees or slippage. With fewer than 8 episodes the statistics are not shown at all. It describes the past and is not a forecast.
 - **Conditional watch scenarios.** Three observable conditions (stress persists, back to normal, a new breach), what the agent does in each, and the invalidation. A matrix gives, for each coin, the next-day close above or below which volatility, distance from the 30-day average or drawdown would reach the alert rank. They are worked out from the coin's own history by code and are not targets or predictions.
 - **How often the alert rank is reached.** The same rule run over each coin's history, each day ranked only against the days before it, with the number of days, the share of days and the separate episodes. It is an in-sample count and the page says so.
-- **Who wrote what is labelled on the page.** Numbers, ranks, headlines and levels are computed by code. The analysis text is the agent's own latest decision, read back from the Sheet, and it is marked as written by AI. The page shows whether that decision passed the code guardrails and cross-checks the AI's coins against the code's own rank check. The report makes no extra AI call.
-- **What it does not contain:** a price forecast, a probability or a recommendation.
+- **Who wrote what is labelled on the page.** Numbers, ranks, headlines, the subject and levels are computed by code. The analysis text is the agent's own latest decision, read back from the Sheet, and it is marked as written by AI. The page shows whether that decision passed the code guardrails and cross-checks the AI's coins against the code's own rank check. The report makes no extra AI call.
+- **What it does not contain:** a price forecast, a probability of a price move or a recommendation.
 - **Run it:** `python report.py` (live Kraken data; set `SHEET_URL` to include the AI analysis and history), `python report.py --email` to also send it, `python report.py --demo` to preview the layout on synthetic data that the page labels as demo data.
 - **Email:** needs the current `apps_script/Code.gs` deployed as a new version (the `report` action and the `detail` option of `history`). Without it the run still finishes and prints a warning that says so.
-- **Limits:** the charts load plotly.js from a CDN, so the HTML file needs an internet connection to draw them. The email body carries the headlines and the AI analysis without charts.
+- **Checked how:** 41 report tests and 18 insights tests, and a real Chrome run at desktop width and at 390 px (phone): every chart draws, the range tabs and the hover work, no console error, no sideways scroll.
+- **Limits:** the charts load plotly.js from a CDN, so the HTML file needs an internet connection to draw them. The first live email with this layout is not yet confirmed (see Verification status).
 
 ### Sample output
 
 Live run on 2026-11-20 (Actions > Daily crypto watch, version Agent loop). The agent fetched BTC, ETH and XRP from Kraken, read its history from the Sheet, searched the playbook and decided `alert = true` for BTC and XRP with the sources "Alert rules" and "Trend against the 30-day average". The Sheet web app saved the decision as row 2 and sent the email (`email sent: True`). The reasoning in the row quotes the ranks it was given: BTC distance rank 97.0, BTC drawdown rank 96.6, XRP drawdown rank 96.1, all at or above the alert rank of 95.
+
+## Ask page (RAG over the playbook)
+
+`python rag_server.py` opens a page on your own computer where you ask questions about `playbook.md` (18 sections: every rule, threshold and data source) and get an answer that cites the section it came from. Your Groq key stays on your computer, and the daily workflow does not depend on this page.
+
+- **How it answers.** (1) Code searches the playbook with BM25, a standard keyword ranking (standard library only), and keeps the best three sections. (2) With a key, the AI writes a short answer from those three sections only and must name the section of every point. (3) Code checks the answer before you see it: a cited section must exist and must be one of the three retrieved, and no advice word from the agent's own banned list may appear. A failed check drops that point. If nothing is left, or the AI call fails, the page shows the playbook's own sentences instead and says so. Without a key it always shows the playbook sentences.
+- **The evidence is never written by the AI.** The quotes in the evidence panel are sentences chosen by code and copied word for word from the section.
+- **It describes the rules and nothing else.** A question that asks for advice or a forecast ("Should I buy BTC now?", "Will it go up?") is declined by code before any AI call. A question the playbook does not cover gets "That is not in the playbook."
+- **On the page:** a question box with three example questions, the 18 topics, the answer (bottom line, numbered points each tied to its section, three guardrail checks), related questions, a follow-up box, the evidence panel, the agent's own settings (alert rank 95, near threshold 90, 280 characters, the rejected words), Copy brief and Export PDF. "Created by Rizwana Zahoor" is in the header and footer. A follow-up is a new standalone question: the page does not carry the earlier answer into it. "Recent" is kept in your browser only.
+- **Run it** (needs only `requests`, from `requirements.txt`):
+  - Windows PowerShell: `$env:GROQ_API_KEY = "your key"` then `python rag_server.py --open`
+  - Windows cmd: `set GROQ_API_KEY=your key` then `python rag_server.py --open`
+  - macOS or Linux: `export GROQ_API_KEY=...` then `python rag_server.py --open`
+  - Without a key, or with `--no-ai`, it shows the playbook text. The page is at `http://127.0.0.1:8765`; `--port` picks another. If `executive-report.html` is in the folder you started it from, a "Daily report" link appears. `python rag.py "your question"` answers in the terminal and `python rag.py --check` runs the retrieval test set.
+- **Security.** It listens on 127.0.0.1 only. It answers a request only when the Host header is its own address, a browser request only from its own page, and only JSON of at most 4 KB, so another web page cannot make your browser call it. At most 20 questions a minute (this protects the free Groq quota). The key comes only from the environment of that process: it is not sent to the page, not written to a file, not logged, and no reply carries it. Question text is not logged. The page builds its text with `textContent`, never `innerHTML`, and a strict Content-Security-Policy applies. Tests check each of these.
+- **Measured retrieval.** The test set has 21 questions across the 18 sections: the right section is first for 19 and in the top three for all 21. Two off-topic questions match nothing and three advice requests are declined by code. These questions were written by me with the AI against this playbook, so this is a regression test, not an unbiased accuracy figure. One miss ("When does the agent raise an alert?" returned the base-rate section) led to a small synonym rule for raise, trigger and fire, and two checks were added after it.
+- **Limits.** The AI's wording on the real model is not yet measured, because it needs the key (the guardrails are tested with scripted answers). The tokens per question are not measured either. The page does not read live numbers or the Sheet: it explains the rules, it does not say what the market is doing today. Retrieval is keyword-based, so a question that shares no words with the playbook will not match.
 
 ## Run it from a fresh clone
 
@@ -579,8 +606,9 @@ Live run on 2026-11-20 (Actions > Daily crypto watch, version Agent loop). The a
 5. **Look at the data:** `python export_data.py` (CSV files in `data_export/`) and `python validate_data.py` (the data quality report). Neither needs a key or an AI.
 6. **Run the agent:** `python agent.py` (add `--dry-run` to skip the Sheet; `--mode planner --reviewer on` for another version).
 7. **Check the free sources, no AI and no tokens:** `python agent.py --check-sources`. In GitHub: Actions > Data sources check > Run workflow. It also prints the CSV files and the validation report.
-8. **Run the tests.** Offline: `python tests/test_guardrails.py -v`, `python tests/test_context.py -v`, `python tests/test_report.py -v`, `python tests/test_sources.py -v`, `python tests/test_export.py -v`, `python tests/test_validate.py -v`, `python tests/test_fetch_data.py -v`, `python tests/test_features.py -v`. With the real AI on fake data: `python agent.py --test` (20 scenarios, about 460,000 tokens, so run them in batches with `--only`; see the token budget).
+8. **Run the tests.** Offline: `python tests/test_guardrails.py -v`, `python tests/test_context.py -v`, `python tests/test_report.py -v`, `python tests/test_insights.py -v`, `python tests/test_rag.py -v`, `python tests/test_sources.py -v`, `python tests/test_export.py -v`, `python tests/test_validate.py -v`, `python tests/test_fetch_data.py -v`, `python tests/test_features.py -v`. With the real AI on fake data: `python agent.py --test` (20 scenarios, about 460,000 tokens, so run them in batches with `--only`; see the token budget).
 9. **Measure the four versions:** `python agent.py --measure` (needs the paid tier).
+10. **Ask the playbook:** `python rag_server.py --open` (see the Ask page section; the key stays on your computer).
 
 ## Files
 
@@ -592,14 +620,17 @@ Live run on 2026-11-20 (Actions > Daily crypto watch, version Agent loop). The a
 | `features.py` | The market features: returns, volatility, trend, drawdown, tail risk, liquidity, link to Bitcoin, own-history ranks and labels, from Kraken's 8 values. Standard library only |
 | `validate_data.py` | The data audit: 16 checks per coin and 1 across coins, on timestamps, values and an independent CoinGecko comparison |
 | `scenarios.py` | Test mode: fake data and the 20 scenarios, `--only`, `--publish`, and the `--measure` table |
-| `report.py` | The executive intelligence brief (HTML page and email) |
+| `report.py` | The executive intelligence brief (interactive HTML page, email and subject) |
+| `insights.py` | The event study, the top 3 headlines and the email subject, computed from the data. Standard library only |
+| `rag.py` | The Ask page's engine: BM25 search of the playbook, the answer guardrails, the retrieval test set (`--check`) |
+| `rag_server.py`, `rag_ui.html` | The Ask page: a local server (127.0.0.1 only) and its single-file page |
 | `playbook.md` | The agent's own rules, with a reason and a source for every threshold |
 | `calibrate.py` | Backtest of the alert rank on live Kraken history |
 | `apps_script/Code.gs` | The Google Apps Script web app (history, save, append, report email). No key in it |
-| `tests/test_guardrails.py`, `test_context.py`, `test_report.py`, `test_sources.py`, `test_export.py`, `test_validate.py`, `test_fetch_data.py`, `test_features.py` | The 286 offline tests |
+| `tests/test_guardrails.py`, `test_context.py`, `test_report.py`, `test_insights.py`, `test_rag.py`, `test_sources.py`, `test_export.py`, `test_validate.py`, `test_fetch_data.py`, `test_features.py` | The 367 offline tests |
 | `.github/workflows/daily.yml` | The daily run at 05:17 UTC (09:17 in Dubai) |
 | `.github/workflows/tests.yml` | The offline tests, and the scenario tests with the real AI, on every code or playbook change |
-| `.github/workflows/report.yml` | The executive brief, emailed after each successful daily run |
+| `.github/workflows/report.yml` | The executive brief, emailed once after each successful daily run, then the Ask page's index check (no AI) |
 | `.github/workflows/sources.yml` | The manual data check: every source once, the CSV export and the data validation. No AI |
 | `AI_LOG.md` | The prompts that mattered most, and what the AI got wrong or I changed |
 

@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crypto Watch: Ask the playbook</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root{--ink:#0A0E16;--bar:#05080D;--panel:#111826;--line:#1F2937;--line2:#2A3446;--amber:#F6B73C;--teal:#5ED0C3;--alert:#B3261E;--neg:#FF7A70;--muted:#A3ACBD;--text:#F2F4F8;--soft:#D5DAE4;--green:#7DD9A0;--violet:#C4B5FD}
+*{box-sizing:border-box}
+html{color-scheme:dark}
+body{margin:0;background:var(--ink);color:var(--text);font-family:Inter,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.5}
+a{color:#8FE3D8}a:hover{color:#BDF1EA}
+:focus-visible{outline:3px solid #8FE3D8;outline-offset:2px}
+.wrap{max-width:1360px;margin:0 auto;padding:0 32px}
+.bar{background:var(--bar);border-bottom:1px solid #1B2433}
+.bar .wrap{padding-top:14px;padding-bottom:14px;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px 24px}
+.brand{display:flex;flex-wrap:wrap;align-items:center;gap:12px 14px}
+.logo{font-family:"Barlow Condensed","Arial Narrow",sans-serif;font-weight:700;font-size:28px;letter-spacing:.04em;text-transform:uppercase}
+.pill{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#fff;background:#1F6F4A;border-radius:4px;padding:4px 10px}
+.pill i{width:8px;height:8px;border-radius:50%;background:#fff;display:inline-block;animation:pulse 1.8s ease-in-out infinite}
+.byline{font-size:13px;color:var(--muted);padding-left:14px;border-left:1px solid var(--line2);animation:byline .9s ease-out .3s both}
+.credit{font-weight:600;background:linear-gradient(100deg,#F2F4F8 0%,#F2F4F8 38%,#F6B73C 50%,#F2F4F8 62%,#F2F4F8 100%);background-size:200% 100%;-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent;animation:sheen 6s 1.2s ease-in-out infinite}
+.nav{display:flex;flex-wrap:wrap;align-items:center;gap:8px 24px;font-size:14px;color:var(--muted)}
+.nav a{display:inline-flex;align-items:center;min-height:44px;font-weight:600;text-decoration:none}
+h1,h2,h3{margin:0}
+.cond{font-family:"Barlow Condensed","Arial Narrow",sans-serif}
+.cap{font-size:12px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.mono{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace}
+main.wrap{padding-top:40px;padding-bottom:56px}
+.hero{display:flex;flex-direction:column;gap:20px;max-width:900px}
+.hero h1{font-family:"Barlow Condensed","Arial Narrow",sans-serif;font-weight:700;font-size:clamp(48px,8vw,92px);line-height:.96;text-transform:uppercase}
+.hero p{margin:0;font-size:20px;color:var(--soft);max-width:720px}
+.ask{display:flex;gap:10px;flex-wrap:wrap}
+.ask input{flex:1 1 320px;min-height:52px;background:var(--panel);color:var(--text);border:1px solid var(--line2);border-radius:6px;padding:0 16px;font:500 17px Inter,"Segoe UI",Arial,sans-serif}
+.ask input::placeholder{color:#7C8699}
+.btn{min-height:52px;padding:0 24px;border-radius:6px;border:0;background:var(--amber);color:#0A0E16;font:700 16px Inter,"Segoe UI",Arial,sans-serif;cursor:pointer}
+.btn:hover{background:#FFC857}.btn[disabled]{opacity:.55;cursor:progress}
+.btn.ghost{background:transparent;border:1px solid #3A465C;color:var(--soft);min-height:44px;padding:0 16px;font-size:14px}
+.btn.ghost:hover{border-color:var(--amber);color:var(--text)}
+.try{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.chip{min-height:36px;padding:4px 14px;border-radius:999px;border:1px solid #3A465C;background:transparent;color:var(--soft);font:500 14px Inter,"Segoe UI",Arial,sans-serif;cursor:pointer;text-align:left}
+.chip:hover{border-color:var(--amber);color:var(--text)}
+.section{margin-top:48px;display:flex;flex-direction:column;gap:16px}
+.sh{display:flex;align-items:center;gap:14px}
+.sh h2{font-family:"Barlow Condensed","Arial Narrow",sans-serif;font-weight:700;font-size:30px;text-transform:uppercase;letter-spacing:.02em}
+.sh .rule{flex:1;height:1px;background:var(--line2)}
+.topics{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(280px,100%),1fr));gap:12px}
+.topic{display:flex;flex-direction:column;gap:6px;text-align:left;padding:16px 18px;background:var(--panel);border:1px solid var(--line);border-radius:6px;color:var(--text);cursor:pointer;font:inherit}
+.topic:hover{border-color:var(--amber)}
+.topic .n{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:12px;color:var(--amber)}
+.topic .t{font-weight:600;font-size:15px}.topic .l{font-size:13px;color:var(--muted)}
+.trust{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(240px,100%),1fr));gap:16px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:20px 22px;display:flex;flex-direction:column;gap:8px}
+.card h3{font-family:"Barlow Condensed","Arial Narrow",sans-serif;font-weight:600;font-size:24px}
+.card p{margin:0;font-size:14px;color:var(--soft)}
+.shell{display:grid;grid-template-columns:240px minmax(0,1fr) 340px;gap:28px;align-items:start}
+.rail{display:flex;flex-direction:column;gap:16px;position:sticky;top:16px}
+.rail ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+.rail button.link{width:100%;text-align:left;background:none;border:0;color:var(--soft);font:400 14px Inter,"Segoe UI",Arial,sans-serif;padding:8px 10px;border-radius:4px;cursor:pointer;min-height:36px}
+.rail button.link:hover{background:var(--panel);color:var(--text)}
+.center{display:flex;flex-direction:column;gap:22px;min-width:0}
+.qtitle{font-family:"Barlow Condensed","Arial Narrow",sans-serif;font-weight:600;font-size:clamp(28px,3.4vw,40px);line-height:1.12}
+.bottom{background:var(--panel);border:1px solid var(--line);border-top:3px solid var(--amber);border-radius:6px;padding:22px 26px;display:flex;flex-direction:column;gap:10px}
+.bottom p{margin:0;font-family:"Barlow Condensed","Arial Narrow",sans-serif;font-weight:600;font-size:clamp(26px,3vw,36px);line-height:1.15}
+.why{display:flex;flex-direction:column;gap:12px;margin:0;padding:0;list-style:none}
+.why li{display:grid;grid-template-columns:34px minmax(0,1fr);gap:12px;padding:14px 0;border-top:1px solid var(--line)}
+.why .n{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:13px;color:var(--amber);padding-top:2px}
+.why p{margin:0;color:var(--soft)}
+.cite{display:inline-block;margin-top:6px;font-size:12px;font-weight:600;color:var(--teal);background:rgba(94,208,195,.12);border-radius:4px;padding:2px 8px;border:0;cursor:pointer;font-family:Inter,"Segoe UI",Arial,sans-serif}
+.guards{display:flex;flex-wrap:wrap;gap:8px 18px;font-size:13px;color:var(--muted)}
+.guards .ok{color:var(--green)}.guards .bad{color:var(--neg)}
+.note{font-size:13px;color:var(--amber);background:rgba(246,183,60,.08);border-left:3px solid var(--amber);padding:10px 14px;border-radius:4px}
+.actions{display:flex;flex-wrap:wrap;gap:10px}
+.related{display:flex;flex-wrap:wrap;gap:8px}
+.side{display:flex;flex-direction:column;gap:16px;min-width:0}
+.ev{display:flex;flex-direction:column;gap:6px;padding:14px 0;border-top:1px solid var(--line)}
+.ev:first-of-type{border-top:0}
+.ev .t{font-weight:600}.ev q{color:var(--soft);font-size:14px;quotes:"\201C" "\201D"}
+.ev.hot{background:rgba(246,183,60,.06);outline:1px solid rgba(246,183,60,.4);border-radius:4px;padding:14px 10px}
+.legend{display:flex;flex-direction:column;gap:8px;font-size:14px;color:var(--soft)}
+.legend b{display:inline-block;min-width:112px;font-weight:700}
+.legend b.num{min-width:0;margin-right:6px}
+.swatch{display:inline-block;width:12px;height:12px;border-radius:2px;margin-right:8px;vertical-align:-1px}
+.words{display:flex;flex-wrap:wrap;gap:6px}
+.words span{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:12px;background:rgba(229,72,63,.16);color:#FF9C94;border-radius:4px;padding:2px 8px}
+.loading{color:var(--muted);font-size:15px}
+footer{border-top:1px solid var(--line);padding:24px 0 40px;font-size:12px;color:var(--muted);line-height:1.6}
+footer .by{font-size:15px;color:var(--soft);margin-bottom:8px}
+footer .by .credit{font-size:18px}
+[hidden]{display:none!important}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+@keyframes sheen{0%{background-position:200% 0}100%{background-position:-200% 0}}
+@keyframes byline{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:none}}
+@keyframes fade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.fade{animation:fade .45s ease-out both}
+@media (prefers-reduced-motion:reduce){.pill i,.byline,.fade{animation:none}.credit{animation:none;background:none;-webkit-text-fill-color:var(--text);color:var(--text)}}
+@media (max-width:1100px){.shell{grid-template-columns:minmax(0,1fr)}.rail{position:static;order:3}.center{order:1}.side{order:2}}
+@media (max-width:640px){.wrap{padding:0 18px}.hero p{font-size:17px}}
+@media print{body{background:#fff;color:#111}.bar,.rail,.ask,.actions,.related,#start,#followup{display:none!important}.shell{display:block}.bottom,.card,.ev{break-inside:avoid;border-color:#bbb;background:#fff}.bottom p,.why p,.ev q,.qtitle{color:#111}}
+</style>
+</head>
+<body>
+<div class="bar"><div class="wrap">
+  <div class="brand"><span class="logo">Crypto Watch</span><span class="pill"><i></i>Local</span>
+    <span class="byline">Created by <span class="credit">Rizwana Zahoor</span></span></div>
+  <nav class="nav" aria-label="Pages"><a href="/" id="home">Ask the playbook</a><a href="/report" id="reportLink" hidden>Daily report</a></nav>
+</div></div>
+
+<main class="wrap">
+  <section id="start" class="hero">
+    <span class="cap">Playbook intelligence</span>
+    <h1>Answers you can audit</h1>
+    <p>Ask about any rule, threshold or data source in your playbook. Each answer cites the exact section it came from and is checked by code before you see it.</p>
+    <form class="ask" id="askForm" role="search">
+      <label class="cap" for="q" style="flex-basis:100%">Ask a question about the playbook</label>
+      <input id="q" type="text" maxlength="300" autocomplete="off" placeholder="For example: What does near threshold mean?" required>
+      <button class="btn" type="submit" id="askBtn">Ask</button>
+    </form>
+    <div class="try"><span class="cap">Try</span>
+      <button class="chip" type="button" data-q="Can an extreme Fear and Greed reading raise an alert?">Can an extreme Fear and Greed reading raise an alert?</button>
+      <button class="chip" type="button" data-q="What does near threshold mean?">What does near threshold mean?</button>
+      <button class="chip" type="button" data-q="Which words are banned in an alert message?">Which words are banned in an alert message?</button></div>
+    <div id="mode" class="cap" aria-live="polite"></div>
+  </section>
+
+  <div id="answerView" class="shell" hidden>
+    <aside class="rail" aria-label="History and sections">
+      <button class="btn ghost" type="button" id="newQ">New question</button>
+      <div><div class="cap" style="margin-bottom:6px">Recent</div><ul id="recent"></ul></div>
+      <div><div class="cap" style="margin-bottom:6px">The playbook, <span id="railCount"></span> sections</div><ul id="railTopics"></ul></div>
+    </aside>
+    <div class="center" id="center" aria-live="polite">
+      <h2 class="qtitle" id="qtitle"></h2>
+      <div id="result"></div>
+      <form class="ask" id="followup"><label class="cap" for="q2" style="flex-basis:100%">Ask a follow-up question</label>
+        <input id="q2" type="text" maxlength="300" autocomplete="off" required><button class="btn" type="submit">Ask</button></form>
+    </div>
+    <aside class="side" aria-label="Evidence and reference">
+      <div class="card"><span class="cap" id="evHead">Evidence</span><div id="evidence"></div></div>
+      <div class="card"><span class="cap">Reference, from the agent's own settings</span>
+        <div class="legend" id="legend"></div></div>
+    </aside>
+  </div>
+
+  <section class="section" id="topicsSection">
+    <div class="sh"><h2>What you can ask about</h2><span class="rule"></span><span class="cap"><span id="topicCount"></span> playbook sections</span></div>
+    <div class="topics" id="topics"></div>
+  </section>
+
+  <section class="section" id="trustSection">
+    <div class="sh"><h2>Why you can rely on it</h2><span class="rule"></span></div>
+    <div class="trust">
+      <div class="card"><h3>Cited to the section</h3><p>Every point names the playbook section it came from, so you can open the rule and read it yourself.</p></div>
+      <div class="card"><h3>Checked before you see it</h3><p>Sections that do not exist, sections that were not retrieved, and advice words are rejected by code, not left to the AI's judgment.</p></div>
+      <div class="card"><h3>Runs on your computer</h3><p>Your Groq key stays on this machine. The page talks only to this local server.</p></div>
+      <div class="card"><h3>Describes, never advises</h3><p>Market analysis and decision support. Nothing here tells anyone to buy or sell, and nothing is a prediction.</p></div>
+    </div>
+  </section>
+</main>
+
+<footer><div class="wrap"><div class="by">Created by <span class="credit">Rizwana Zahoor</span></div>
+Live market-data analysis and decision support. Not investment advice: answers describe the rules and never tell anyone to buy or sell.</div></footer>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var state = { topics: [], reference: null, ai: false, last: null };
+
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
+  function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+
+  function recent() { try { return JSON.parse(localStorage.getItem("cwa_recent") || "[]"); } catch (e) { return []; } }
+  function remember(q) {
+    try { var list = recent().filter(function (x) { return x !== q; }); list.unshift(q); localStorage.setItem("cwa_recent", JSON.stringify(list.slice(0, 8))); } catch (e) { /* storage is optional */ }
+  }
+  function drawRecent() {
+    var ul = $("recent"); clear(ul);
+    var list = recent();
+    if (!list.length) { var li = el("li", "muted"); li.appendChild(el("span", "cap", "None yet")); ul.appendChild(li); return; }
+    list.forEach(function (q) { var li = el("li"); var b = el("button", "link", q); b.type = "button"; b.addEventListener("click", function () { ask(q); }); li.appendChild(b); ul.appendChild(li); });
+  }
+
+  function drawTopics() {
+    var grid = $("topics"), rail = $("railTopics"); clear(grid); clear(rail);
+    $("topicCount").textContent = state.topics.length; $("railCount").textContent = state.topics.length;
+    state.topics.forEach(function (t) {
+      var b = el("button", "topic"); b.type = "button";
+      b.appendChild(el("span", "n", String(t.n).padStart(2, "0"))); b.appendChild(el("span", "t", t.title)); b.appendChild(el("span", "l", t.line));
+      b.addEventListener("click", function () { ask("What does the playbook say about " + t.title + "?"); });
+      grid.appendChild(b);
+      var li = el("li"); var r = el("button", "link", t.title); r.type = "button";
+      r.addEventListener("click", function () { ask("What does the playbook say about " + t.title + "?"); }); li.appendChild(r); rail.appendChild(li);
+    });
+  }
+
+  function drawLegend() {
+    var r = state.reference; if (!r) return;
+    var box = $("legend"); clear(box);
+    [["#E5483F", "Alert", "rank " + r.alert_rank + " to 100"], ["#F6B73C", "Near threshold", r.near_rank + " to under " + r.alert_rank], ["#3A465C", "Calm", "every rank below " + r.near_rank]].forEach(function (x) {
+      var row = el("div"); var sw = el("span", "swatch"); sw.style.background = x[0]; row.appendChild(sw); row.appendChild(el("b", "", x[1])); row.appendChild(document.createTextNode(x[2])); box.appendChild(row);
+    });
+    var chars = el("div"); chars.appendChild(el("b", "mono num", String(r.max_chars))); chars.appendChild(document.createTextNode(" characters at most in an alert message")); box.appendChild(chars);
+    var cap = el("div", "cap", "Rejected words"); box.appendChild(cap);
+    var words = el("div", "words"); r.banned_words.forEach(function (w) { words.appendChild(el("span", "", w)); }); box.appendChild(words);
+  }
+
+  function render(a) {
+    state.last = a;
+    $("qtitle").textContent = a.question;
+    var res = $("result"); clear(res);
+    var wrap = el("div", "fade"); wrap.style.display = "flex"; wrap.style.flexDirection = "column"; wrap.style.gap = "22px";
+    if (a.note) wrap.appendChild(el("div", "note", a.note));
+    var bottom = el("div", "bottom"); bottom.appendChild(el("span", "cap", "Bottom line")); bottom.appendChild(el("p", "", a.bottom_line)); wrap.appendChild(bottom);
+    if (a.why && a.why.length) {
+      var box = el("div"); box.appendChild(el("span", "cap", a.kind === "retrieval" ? "From the playbook" : "Why"));
+      var ol = el("ol", "why");
+      a.why.forEach(function (w, i) {
+        var li = el("li"); li.appendChild(el("span", "n", String(i + 1).padStart(2, "0")));
+        var body = el("div"); body.appendChild(el("p", "", w.text));
+        var c = el("button", "cite", w.section); c.type = "button"; c.title = "Show this section in the evidence panel";
+        c.addEventListener("click", function () { highlight(w.section); }); body.appendChild(c); li.appendChild(body); ol.appendChild(li);
+      });
+      box.appendChild(ol); wrap.appendChild(box);
+    }
+    var g = a.guardrails || { checks: [], passed: 0, total: 0 };
+    var guards = el("div", "guards"); guards.setAttribute("role", "status");
+    guards.appendChild(el("span", g.passed === g.total ? "ok" : "bad", "Guardrails: " + g.passed + " of " + g.total + " passed"));
+    (g.checks || []).forEach(function (c) { guards.appendChild(el("span", c.passed ? "ok" : "bad", (c.passed ? "✓ " : "✗ ") + c.name)); });
+    guards.appendChild(el("span", "", a.used_ai ? "Written by AI, checked by code" : "No AI text used"));
+    guards.appendChild(el("span", "", "Describes, never advises"));
+    wrap.appendChild(guards);
+    var actions = el("div", "actions");
+    var copy = el("button", "btn ghost", "Copy brief"); copy.type = "button"; copy.addEventListener("click", function () { copyBrief(copy); });
+    var pdf = el("button", "btn ghost", "Export PDF"); pdf.type = "button"; pdf.addEventListener("click", function () { window.print(); });
+    actions.appendChild(copy); actions.appendChild(pdf); wrap.appendChild(actions);
+    if (a.related && a.related.length) {
+      var rel = el("div"); rel.appendChild(el("span", "cap", "Related questions")); var row = el("div", "related"); row.style.marginTop = "8px";
+      a.related.forEach(function (q) { var b = el("button", "chip", q); b.type = "button"; b.addEventListener("click", function () { ask(q); }); row.appendChild(b); });
+      rel.appendChild(row); wrap.appendChild(rel);
+    }
+    res.appendChild(wrap);
+    var ev = $("evidence"); clear(ev);
+    $("evHead").textContent = "Evidence: " + (a.evidence || []).length + " of " + state.topics.length + " sections";
+    (a.evidence || []).forEach(function (e) {
+      var d = el("div", "ev"); d.dataset.title = e.title;
+      d.appendChild(el("span", "cap", "Playbook section " + e.n)); d.appendChild(el("span", "t", e.title)); d.appendChild(el("q", "", e.quote)); ev.appendChild(d);
+    });
+    if (!(a.evidence || []).length) ev.appendChild(el("p", "muted", "No section is cited for this answer."));
+  }
+
+  function highlight(title) {
+    document.querySelectorAll("#evidence .ev").forEach(function (n) { n.classList.toggle("hot", n.dataset.title === title); });
+    var hot = document.querySelector("#evidence .ev.hot"); if (hot && hot.scrollIntoView) hot.scrollIntoView({ block: "nearest" });
+  }
+
+  function copyBrief(button) {
+    var a = state.last; if (!a) return;
+    var lines = [a.question, "", "Bottom line: " + a.bottom_line];
+    if (a.why && a.why.length) { lines.push("", "Why:"); a.why.forEach(function (w) { lines.push("- " + w.text + " [" + w.section + "]"); }); }
+    lines.push("", "Created by Rizwana Zahoor. Describes the playbook; not investment advice.");
+    var text = lines.join("\n");
+    function done() { var old = button.textContent; button.textContent = "Copied"; setTimeout(function () { button.textContent = old; }, 1500); }
+    if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text, done); }); } else { fallbackCopy(text, done); }
+  }
+  function fallbackCopy(text, done) {
+    var t = document.createElement("textarea"); t.value = text; t.style.position = "fixed"; t.style.opacity = "0"; document.body.appendChild(t); t.select();
+    try { document.execCommand("copy"); done(); } catch (e) { /* nothing more to try */ } document.body.removeChild(t);
+  }
+
+  function show(view) {
+    $("start").hidden = view !== "start"; $("answerView").hidden = view !== "answer";
+    $("topicsSection").hidden = view !== "start"; $("trustSection").hidden = view !== "start";
+  }
+
+  function ask(q) {
+    q = (q || "").trim(); if (q.length < 3) return;
+    show("answer"); $("qtitle").textContent = q;
+    var res = $("result"); clear(res); res.appendChild(el("p", "loading", "Searching the playbook…"));
+    $("evidence").textContent = ""; remember(q); drawRecent();
+    [$("askBtn")].forEach(function (b) { b.disabled = true; });
+    fetch("/api/ask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: q }) })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
+      .then(function (x) {
+        if (!x.ok) { clear(res); res.appendChild(el("div", "note", (x.body && x.body.error) || "The request failed.")); return; }
+        render(x.body); $("q2").value = ""; window.scrollTo({ top: 0 });
+      })
+      .catch(function () { clear(res); res.appendChild(el("div", "note", "The local server did not answer. Is python rag_server.py still running?")); })
+      .then(function () { $("askBtn").disabled = false; });
+  }
+
+  $("askForm").addEventListener("submit", function (e) { e.preventDefault(); ask($("q").value); });
+  $("followup").addEventListener("submit", function (e) { e.preventDefault(); ask($("q2").value); });
+  $("newQ").addEventListener("click", function () { show("start"); $("q").value = ""; $("q").focus(); });
+  $("home").addEventListener("click", function (e) { e.preventDefault(); show("start"); $("q").focus(); });
+  document.querySelectorAll(".chip[data-q]").forEach(function (b) { b.addEventListener("click", function () { $("q").value = b.dataset.q; ask(b.dataset.q); }); });
+
+  fetch("/api/sections").then(function (r) { return r.json(); }).then(function (j) {
+    state.topics = j.topics; state.reference = j.reference; state.ai = j.ai;
+    drawTopics(); drawLegend(); drawRecent();
+    $("mode").textContent = j.ai ? "AI answers on (" + j.model + "), checked by code" : "AI answers off: showing the matching playbook text. Set GROQ_API_KEY and restart for written answers.";
+    if (j.report) $("reportLink").hidden = false;
+  }).catch(function () { $("mode").textContent = "The local server did not answer."; });
+})();
+</script>
+</body>
+</html>

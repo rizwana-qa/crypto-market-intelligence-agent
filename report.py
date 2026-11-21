@@ -557,6 +557,7 @@ h1{margin:0;font-family:"Barlow Condensed","Arial Narrow",sans-serif;font-weight
 .tile .v{font-family:"Barlow Condensed","Arial Narrow",sans-serif;font-weight:700;font-size:48px;line-height:1}
 .tile .s{font-size:13px;color:var(--muted)}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:22px 26px;margin:0;overflow-x:auto}
+.card[tabindex="0"]:focus-visible{outline:3px solid #8FE3D8;outline-offset:2px}
 .card h2{margin:0 0 6px;font-family:"Barlow Condensed","Arial Narrow",sans-serif;font-weight:700;font-size:24px;text-transform:uppercase;letter-spacing:.02em}
 .card .sub,.sub{color:var(--muted);font-size:13px;margin:0 0 14px}
 .card b{color:var(--text)}
@@ -803,7 +804,7 @@ def scoreboard(data):
 def hero(data, as_of):
     label, tone, _ = status_of(data)
     shown = {"ALERT": "Alert", "CALM": "Calm market", "NO DATA": "No data", "PARTIAL": "Partial data"}[label]
-    demo = '<span class="badge2" style="background:#B7791F">Demo data: synthetic prices</span>' if data.get("demo") else ""
+    demo = '<span class="badge2" style="background:#A06A1A">Demo data: synthetic prices</span>' if data.get("demo") else ""
     return (f'<div class="hero"><div class="lead"><div class="meta"><span class="badge2{tone_class(tone)}"><span class="dot"></span>{shown}</span>{demo}'
             f'<span>Data as of {esc(as_of)} (latest completed UTC day) &middot; generated {esc(data["generated"])} UTC</span></div>'
             f'<h1>{esc(hero_title(data))}</h1><p class="deck">{esc(hero_deck(data))}</p>'
@@ -900,7 +901,7 @@ def snapshot_table(data):
         s = c["summary"]
         status = coin_status(s)
         rows.append(
-            f'<tr><td><b>{esc(c["coin"])}</b><br><span style="color:#64748b;font-size:12px">{esc(s["pair"])}</span></td>'
+            f'<tr><td><b>{esc(c["coin"])}</b><br><span style="color:#718299;font-size:12px">{esc(s["pair"])}</span></td>'
             f'<td class="num">${s["last_close"]:,.4f}</td><td class="num">{s["daily_return_pct"]:+.2f}%</td>'
             f'<td class="num">{s["volatility_30d_daily_pct"]:.2f}% {rank_cell(s["ranks"]["volatility"])}</td>'
             f'<td class="num">{s["dist_from_30d_avg_pct"]:+.2f}% {rank_cell(s["ranks"]["distance"])}</td>'
@@ -931,7 +932,7 @@ def scenario_rows():
 
 def scenario_section():
     rows = "".join(f"<tr><td><b>{esc(a)}</b></td><td>{esc(b)}</td><td>{esc(c)}</td></tr>" for a, b, c in scenario_rows())
-    return ('<section class="card"><h2>What the agent does in each situation<span class="chip check">EACH ROW IS A SCENARIO TEST</span></h2>'
+    return ('<section class="card" tabindex="0" role="region" aria-label="Agent situations table, scrolls sideways"><h2>What the agent does in each situation<span class="chip check">EACH ROW IS A SCENARIO TEST</span></h2>'
             '<p class="sub">The AI recommends and the code decides. These rules are in the playbook, and every row has a test that runs on each code change.</p>'
             f'<table><tr><th>Situation</th><th>Trigger</th><th>What the agent does</th></tr>{rows}</table></section>')
 
@@ -1011,7 +1012,7 @@ def context_section(data):
                  f'<table><tr><th>Pair</th><th class="num">Correlation</th><th class="num">Rank</th><th>Reading</th></tr>{body}</table>')
     elif cross.get("error"):
         pairs = f'<p class="sub">Relationships unavailable: {esc(cross["error"])}.</p>'
-    return ('<section class="card"><h2>Context: trend, volume and relationships<span class="chip code">COMPUTED BY CODE</span></h2>'
+    return ('<section class="card" tabindex="0" role="region" aria-label="Trend, volume and relationships tables, scrolls sideways"><h2>Context: trend, volume and relationships<span class="chip code">COMPUTED BY CODE</span></h2>'
             '<p class="sub">These describe the past and never raise an alert on their own. Volume is the coin\'s traded volume on Kraken, not market-wide volume. '
             f'Relative strength is a coin\'s 30-day return minus the group average.</p>{table}{pairs}</section>')
 
@@ -1080,7 +1081,7 @@ def market_context_section(data):
     flags = context.get("flags") or []
     flag_html = (f'<p class="sub"><b>Unusual today:</b> {esc("; ".join(flags))}.</p>' if flags
                  else '<p class="sub"><b>Unusual today:</b> nothing among the sources that responded.</p>')
-    return ('<section class="card"><h2>Market context: liquidity, derivatives, implied volatility, sentiment<span class="chip code">COMPUTED BY CODE</span></h2>'
+    return ('<section class="card" tabindex="0" role="region" aria-label="Market context table, scrolls sideways"><h2>Market context: liquidity, derivatives, implied volatility, sentiment<span class="chip code">COMPUTED BY CODE</span></h2>'
             '<p class="sub">Extra free sources that describe how the market is positioned. They are context only: they never raise an alert, and a field that cannot be read says so '
             'instead of being estimated. A positive funding rate means longs pay shorts. Implied volatility is what option prices imply, not a forecast.</p>'
             f'{table}{mood}{flag_html}</section>')
@@ -1116,7 +1117,7 @@ def base_rate_section(data):
     flags = [union[d] for d in sorted(union)]
     rows.append(f'<tr><td><b>Any coin</b></td><td class="num">{len(flags)}</td><td class="num">{sum(flags)}</td>'
                 f'<td class="num">{100.0 * sum(flags) / len(flags):.1f}%</td><td class="num">{episodes(flags)}</td><td></td></tr>')
-    return ('<section class="card"><h2>How often the alert rank is reached<span class="chip code">COMPUTED BY CODE</span></h2>'
+    return ('<section class="card" tabindex="0" role="region" aria-label="Alert rank frequency table, scrolls sideways"><h2>How often the alert rank is reached<span class="chip code">COMPUTED BY CODE</span></h2>'
             f'<p class="sub">The same rule run over each coin\'s own history: a day counts when volatility, distance from the 30-day average or drawdown ranks at {agent.ALERT_RANK:g} or higher. '
             'Each day is ranked only against the days before it, so no future data leaks in. Three days in a row are one episode.</p>'
             '<table><tr><th>Coin</th><th class="num">Days ranked</th><th class="num">Days at the alert rank</th><th class="num">Share of days</th>'
@@ -1166,7 +1167,7 @@ def watch_section(data):
     days = max((c["levels"]["history_days"] for c in good(data) if c.get("levels")), default=0)
     scenarios_rows = watch_scenarios()
     body = "".join(f"<tr><td><b>{esc(a)}</b></td><td>{esc(b)}</td><td>{esc(c)}</td><td>{esc(d)}</td></tr>" for a, b, c, d in scenarios_rows)
-    return ('<section class="card"><h2>Conditional watch scenarios<span class="chip watch">CONDITIONS TO MONITOR, NOT PREDICTIONS</span></h2>'
+    return ('<section class="card" tabindex="0" role="region" aria-label="Watch scenarios and levels tables, scrolls sideways"><h2>Conditional watch scenarios<span class="chip watch">CONDITIONS TO MONITOR, NOT PREDICTIONS</span></h2>'
             '<p class="sub">No probability is given and no price is forecast. Each scenario is a condition that can be observed, what the agent does when it happens, '
             'and what would show the scenario no longer applies.</p>'
             f'<table><tr><th>Scenario</th><th>Condition to observe</th><th>What the agent does</th><th>Invalidation</th></tr>{body}</table>'
@@ -1354,7 +1355,7 @@ def build_html(data):
     data = {**data, "generated_long": data.get("generated_long") or data["generated"][:10]}
     head = "".join(f"<li>{esc(line)}</li>" for line in headlines(data))
     watch = "".join(f"<li>{esc(line)}</li>" for line in triggers(data))
-    snapshot = (f'<section class="card"><h2>Market snapshot<span class="chip code">Computed by code</span></h2>'
+    snapshot = (f'<section class="card" tabindex="0" role="region" aria-label="Market snapshot table, scrolls sideways"><h2>Market snapshot<span class="chip code">Computed by code</span></h2>'
                 f'<p class="sub">Each value is followed by its rank (0 to 100) against that coin\'s own history. Red is at or above {agent.ALERT_RANK:g}, amber is {NEAR_RANK:g} to below {agent.ALERT_RANK:g}.</p>'
                 f'{snapshot_table(data)}</section>')
     return f"""<!DOCTYPE html>
@@ -1380,7 +1381,7 @@ def build_html(data):
 {base_rate_section(data)}
 <section class="card"><h2>What to watch at the next review<span class="chip watch">Monitoring triggers, not forecasts</span></h2><ul class="clean">{watch}</ul></section>
 {watch_section(data)}
-<section class="card"><h2>Decision history<span class="chip code">From the Sheet</span></h2>{decision_table(data)}</section>
+<section class="card" tabindex="0" role="region" aria-label="Decision history table, scrolls sideways"><h2>Decision history<span class="chip code">From the Sheet</span></h2>{decision_table(data)}</section>
 {scenario_section()}
 <section class="card"><h2>How to read this report</h2><div class="legend">
 <span><span class="chip code">Computed by code</span> numbers, ranks, headlines, triggers, event study</span>

@@ -1133,6 +1133,40 @@ def recently_alerted_coins(evidence):
     return coins
 
 
+# The number check for an alert message, used by apply_guardrails (the reviewer keeps unsupported_numbers above, unchanged).
+# It reads numbers like unsupported_numbers does (same parsing, same allowed numbers, same rounding: half a unit in the last
+# written digit, so 20.5 matches 20.46). It adds two ways an honest message writes a real number differently from the JSON:
+# a scale after the number ("$59.1k", "$31.5B", "900 million": checked as the full number) and a window label from the code's own
+# windows ("60-day", "24-hour": a bare 60 or 24 is still checked). It only reports numbers; it never changes the message.
+SCALE_WORDS = {"k": 1e3, "thousand": 1e3, "m": 1e6, "mn": 1e6, "million": 1e6, "b": 1e9, "bn": 1e9, "billion": 1e9,
+               "t": 1e12, "tn": 1e12, "trillion": 1e12}
+WINDOW_LABELS = {TREND_LONG_DAYS: ("day", "days", "d"), 24: ("hour", "hours", "h")}
+WORD_AFTER_RE = re.compile(r"[-\s]?([A-Za-z]+)(?![A-Za-z0-9])")
+
+
+def unsupported_message_numbers(message, evidence_json):
+    known = [abs(value) for _, value, _ in numbers_in(evidence_json)]
+    bad = []
+    for found in NUMBER_RE.finditer(message):
+        raw = found.group()
+        cleaned = raw.replace(",", "").rstrip(".")
+        try:
+            value = abs(float(cleaned))
+        except ValueError:
+            continue
+        tolerance = 0.5 * 10 ** -(len(cleaned.split(".")[1]) if "." in cleaned else 0) + 1e-9
+        after = WORD_AFTER_RE.match(message, found.end())
+        word = after.group(1).lower() if after else ""
+        if word in SCALE_WORDS:
+            value, tolerance = value * SCALE_WORDS[word], tolerance * SCALE_WORDS[word]
+        elif word in WINDOW_LABELS.get(value, ()):
+            continue
+        if value in ALLOWED_NUMBERS or any(abs(value - k) <= tolerance for k in known):
+            continue
+        bad.append(raw)
+    return bad
+
+
 def apply_guardrails(draft, valid_titles, evidence):
     """Blocks an alert that breaks a rule. The AI cannot talk its way past this function."""
     final = dict(draft, blocked_reason="")
@@ -1160,6 +1194,11 @@ def apply_guardrails(draft, valid_titles, evidence):
                 # two other metrics were "new"). An alert that holds at least one coin not alerted recently is left to the AI.
                 reason = (f"{', '.join(draft['coins'])}: already alerted within the last {HISTORY_LIMIT} decisions "
                           "(Repeat alerts rule: no alert again for the same coin)")
+            else:
+                # The alert message may only use numbers that the tools returned. The reasoning is not checked here. A block, never a rewrite.
+                invented = list(dict.fromkeys(unsupported_message_numbers(draft["message"], evidence_text(evidence))))
+                if invented:
+                    reason = f"numbers not found in the evidence: {', '.join(invented)}"
     if reason:
         log(f"GUARDRAIL blocked the alert: {reason}")
         final.update(alert=False, coins=[], message="", blocked_reason=reason)

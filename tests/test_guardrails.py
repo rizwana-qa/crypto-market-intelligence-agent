@@ -18,7 +18,8 @@ import agent  # noqa: E402
 import scenarios  # noqa: E402
 
 TITLES = [section["title"] for section in agent.load_playbook()]
-GOOD_MARKET = [{"tool": "get_market_summary", "args": {"coin": "BTC"}, "result": {"coin": "BTC", "ranks": {}, "breaches": ["volatility"]}}]
+GOOD_MARKET = [{"tool": "get_market_summary", "args": {"coin": "BTC"},
+                "result": {"coin": "BTC", "volatility_30d_daily_pct": 4.8, "ranks": {"volatility": 99.3}, "breaches": ["volatility"]}}]
 
 
 def draft(**changes):
@@ -109,7 +110,7 @@ class Guardrails(QuietCase):
 
 class RepeatGuard(QuietCase):
     """The playbook's Repeat alerts rule, enforced in code: no alert again for a coin that the last 7 decisions already alerted."""
-    XRP = {"tool": "get_market_summary", "args": {"coin": "XRP"}, "result": {"coin": "XRP", "ranks": {}, "breaches": ["volatility"]}}
+    XRP = {"tool": "get_market_summary", "args": {"coin": "XRP"}, "result": {"coin": "XRP", "ranks": {"volatility": 99.1}, "breaches": ["volatility"]}}
 
     @staticmethod
     def history(*decisions, **result):

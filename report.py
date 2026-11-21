@@ -7,7 +7,7 @@ number is the number the agent saw.
 Who writes what, stated on the page itself:
   - Computed by code: prices, the three metrics, the ranks, the headlines and the monitoring triggers.
   - Written by AI: the analysis text, which is the agent's latest decision read back from the Sheet.
-  - Checked by code: the guardrails the decision passed (valid playbook sources, no advice wording, market data).
+  - Checked by code: the guardrails the decision passed (valid playbook sources, no advice wording, market data, numbers found in the evidence, no repeat alert).
 
 There is no price forecast and no recommendation in this report, on purpose: it is live market-data analysis and decision support, not investment advice.
 The "what the history says" section is an event study of past data with its sample sizes shown (insights.py), never a prediction.
@@ -828,7 +828,9 @@ def tile_list(data):
     if not ok:
         return []
     events = data.get("events")
-    tiles = [("Coins at the alert rank", f"{len(breaching(data))} of {len(data['coins'])}", f"Alert rank {agent.ALERT_RANK:g}, near threshold {NEAR_RANK:g}", "")]
+    down = insights.unavailable(data["coins"])   # a coin with no data is not counted as checked, and is named under the number
+    tiles = [("Coins at the alert rank", f"{len(breaching(data))} of {len(ok)}",
+              f"Alert rank {agent.ALERT_RANK:g}, near threshold {NEAR_RANK:g}" + (f". {_join_and(down)} unavailable" if down else ""), "")]
     widest = max(ok, key=lambda c: abs(c["summary"]["dist_from_30d_avg_pct"]))
     gap = widest["summary"]["dist_from_30d_avg_pct"]
     tiles.append(("Widest gap to average", f"{gap:+.2f}%", f"{widest['coin']} against its own 30-day average", "neg" if gap < 0 else "pos"))

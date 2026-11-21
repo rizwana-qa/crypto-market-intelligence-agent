@@ -65,6 +65,18 @@ BANNED_WORDS = [
     "recommendation", "advise", "advice", "take profit", "stop loss", "stop-loss",
 ]
 ADVICE_RE = re.compile(r"\b(?:" + "|".join(re.escape(w) for w in BANNED_WORDS) + r")\b", re.IGNORECASE)
+# Plain market terms and the disclaimer that hold a banned word but give no advice. Only these exact phrases are cut out
+# (whole phrase, any case) before has_advice_language() checks the text. Nothing else is let through.
+ADVICE_SAFE_PHRASES = ["sell-off", "selloff", "long-term", "short-term", "mid-term", "short squeeze", "holding steady",
+                       "not financial advice", "not investment advice"]
+SAFE_PHRASE_RE = re.compile(r"\s*\b(?:" + "|".join(re.escape(p) for p in ADVICE_SAFE_PHRASES) + r")\b\s*", re.IGNORECASE)
+
+
+def has_advice_language(text):
+    """True when the text has a banned word. The safe phrases are cut out first, each replaced by one space (with the spaces around it),
+    so a cut can never join two words, and a phrase placed inside a banned phrase ('take sell-off profit') still shows up."""
+    return bool(ADVICE_RE.search(SAFE_PHRASE_RE.sub(" ", text)))
+
 
 MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
@@ -1144,7 +1156,7 @@ def apply_guardrails(draft, valid_titles, evidence):
     if draft["alert"]:
         if invalid or not final["sources"]:
             reason = "no valid source: every source must be a real playbook section title"
-        elif ADVICE_RE.search(draft["message"]):
+        elif has_advice_language(draft["message"]):
             reason = "advice language in the message"
         elif not any(e["tool"] == "get_market_summary" and "error" not in e["result"] for e in evidence):
             reason = "no valid market data in this run"

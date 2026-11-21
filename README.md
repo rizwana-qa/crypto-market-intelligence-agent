@@ -25,7 +25,7 @@ Contents: [Question and coverage](#question-and-coverage) | [Data sources](#data
 | What has changed in the latest completed daily data | Implemented | Latest completed candle only (today's unfinished candle is dropped): last close, daily return, the price metrics and the context metrics. Ranks are not compared day over day |
 | Unusual compared with each asset's own history | Implemented | Each metric is ranked (percentile, 0 to 100) against that coin's own history, up to about 700 days |
 | Volatility | Implemented, can alert | 30-day daily volatility (sample standard deviation of 30 daily returns) |
-| Distance from the 30-day average, drawdown | Implemented, can alert | Close against its 30-day average; fall from the 30-day high |
+| Distance from the 30-day average, drawdown | Implemented, can alert | Close against its 30-day average; largest fall from a running peak within the last 31 closes |
 | Trends | Implemented as context | Label `up`, `down` or `mixed` from the 30- and 60-day changes and the close against its 30-day average |
 | Volume | Implemented as context | Today's Kraken volume divided by the mean of the previous 30 days, ranked against that ratio's own history. Kraken volume in the coin, not market-wide volume |
 | Relative strength | Implemented as context | A coin's 30-day return minus the group mean, ranked against its own history (unusual at either end) |
@@ -40,7 +40,7 @@ Contents: [Question and coverage](#question-and-coverage) | [Data sources](#data
 | Risk flags | Implemented | Alert (rank 95 or higher), near threshold (90 to below 95), unusual volume, relative strength or correlation (context), data unavailable |
 | Invalidation conditions | Implemented for the watch scenarios | Each scenario states what would show it no longer applies, such as a rank falling below 90 or an invalid candle |
 
-Three limits stay. The agent makes no forecast and gives no advice, by design: the playbook and the code forbid both. Trigger levels in the brief are closed-form values worked out from the coin's own history, not targets. Trend, volume, relative strength, correlation and the market context have no backtest of their own.
+Three limits stay. The agent is designed to make no forecast and give no advice. The playbook forbids both. The code only blocks 23 listed words, as whole words, in an alert message (see the advice filter below), and it does not detect paraphrased advice or predictions. Trigger levels in the brief are closed-form values worked out from the coin's own history, not targets. Trend, volume, relative strength, correlation and the market context have no backtest of their own.
 
 | Coin | Kraken pair | Kraken result key |
 |---|---|---|
@@ -424,7 +424,7 @@ All in code, applied after the AI answers.
 | The web app writes only to four named extra tabs, with a fixed header and row width, and text that starts with = + - @ is escaped | `append_`, `cell_` in `Code.gs` | `SheetTabs` in `tests/test_context.py` (row widths against the `Code.gs` headers) |
 | The Sheet key never appears in an error message or log | `redact` | `Delivery.test_the_key_never_appears_in_an_error` |
 
-**The advice filter.** An alert whose message contains any of these words, as a whole word in any letter case, is blocked: buy, buying, bought, sell, selling, sold, long, short, hold, holding, entry, exit, accumulate, should, recommend, recommends, recommended, recommendation, advise, advice, take profit, stop loss, stop-loss. The list covers actions on a position and advisory verbs. It matches whole words, so "longer", "shortfall" and "holdings" pass. The list is the constant `BANNED_WORDS` at the top of `agent.py`. A blocked alert is stored in the Sheet with its reason and an empty message.
+**The advice filter.** An alert whose message contains any of these words, as a whole word in any letter case, is blocked: buy, buying, bought, sell, selling, sold, long, short, hold, holding, entry, exit, accumulate, should, recommend, recommends, recommended, recommendation, advise, advice, take profit, stop loss, stop-loss. The list covers actions on a position and advisory verbs. It matches whole words, so "longer", "shortfall" and "holdings" pass. The list is the constant `BANNED_WORDS` at the top of `agent.py`. A blocked alert is stored in the Sheet with its reason and an empty message. Wording such as "add to positions" or "will likely rebound" is not caught by the word list, and the filter is a last line of defence behind the prompt.
 
 ## Testing
 
@@ -494,7 +494,7 @@ What has been proved, and how. Dates are 2026-11-21 unless stated.
 | Kraken data export and factors on live data | Verified | [44848783647](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44848783647) |
 | Data validation on live data | Verified: 47 PASS, 1 WARN (real event), 0 FAIL. With the cross-coin check: 49 checks, 48 PASS, 1 WARN, 0 FAIL | [44849463885](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44849463885), [44852768752](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44852768752) |
 | Stricter candle checks, `market_features.csv` (87 columns) and the cross-coin check on live data | Verified: all 2,163 live candles accepted, 2,160 feature rows, no NaN or infinite cell. The same-day rule inside the agent (`align_series`) is not yet run on live data | [44852768752](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44852768752) |
-| Real AI on the six tools, fake scenario data | Scenarios 9 and 17 to 20 passed (5 of 5) | [44843995212](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44843995212), [44845055590](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44845055590) |
+| Real AI on the six tools, fake scenario data | Scenarios 9 and 17 to 20 passed (5 of 5) | [44843995212](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44843995212), [44845055590](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44845055590). Note: run 44845055590 ended with a failed scenario step. Open its log and confirm which scenarios passed before relying on it |
 | Real AI, scenarios 1 to 7 | Passed 2026-11-20 on the four-tool version. Not yet re-run with six tools | [44736173365](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44736173365) |
 | Real AI, scenarios 8 and 10 to 16 | Not run. Scenario 10 started and hit Groq's daily cap | |
 | Full agent on live data, six tools, new Sheet tabs | Verified 2026-11-21, started by hand: run succeeded, Agent row 3 saved, 3 rows added to `market_data` and 3 to `cross_asset`. The agent chose not to call two of its tools (`get_market_context`, `get_alert_history_stats`), so `context_data` got no row that day. It decided no alert (the repeat rule: an alert for these coins was already saved earlier that day), so no alert email was sent. The token count is not printed in the log, so it is not stated here | [44885068321](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44885068321) |
@@ -513,6 +513,8 @@ What has been proved, and how. Dates are 2026-11-21 unless stated.
 The Groq free tier allows 8,000 tokens per minute and 200,000 tokens per day for `openai/gpt-oss-120b`. The run log prints the tokens Groq reports for each scenario (`[scenario N: X AI calls, Y tokens]`), so this plan uses measured numbers where there are any.
 
 **Measured, Agent loop with six tools ([run 44843995212](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44843995212) and [run 44845055590](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44845055590)):**
+
+Note: run 44845055590 ended with a failed scenario step. Open its log and confirm which scenarios passed before relying on it.
 
 | Scenario | Result | AI calls | Tokens |
 |---|---|---|---|

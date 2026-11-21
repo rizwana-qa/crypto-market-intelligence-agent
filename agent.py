@@ -1075,23 +1075,33 @@ def unsupported_numbers(text, evidence_json):
     return bad
 
 
+def number_problem(numbers):
+    return ("numbers not in the evidence: " + ", ".join(dict.fromkeys(numbers)))[:200]
+
+
 def review_draft(draft, evidence):
-    """One reviewer call. A broken reply or a failed call never blocks the job: the draft is kept."""
+    """One reviewer call. A broken reply or a failed call never blocks the job: the draft is kept and the result says 'skipped'.
+    The code number check is binding: numbers that are not in the evidence reject the draft, even when the AI approves."""
     shown = evidence_text(evidence)
     findings = unsupported_numbers(draft["message"] + " " + draft["reasoning"], shown)
     playbook = "\n\n".join(f"## {s['title']}\n{s['text']}" for s in load_playbook())
     content = (f"Evidence:\n{shown}\n\nPlaybook:\n{playbook}\n\nDraft decision:\n{json.dumps(draft)}\n\n"
                f"A code check found these numbers in the draft that are not in the evidence: {findings}")
+    skipped = ""
     try:
         reply = call_llm([{"role": "system", "content": REVIEW_PROMPT}, {"role": "user", "content": content}])
         verdict = extract_json(reply.get("content") or "")
         problems = verdict.get("problems", [])
         if not isinstance(verdict.get("approved"), bool) or not isinstance(problems, list):
             raise ShapeError("the reviewer reply has the wrong shape")
-        return {"approved": verdict["approved"], "problems": [str(p)[:200] for p in problems][:6]}
+        approved, problems = verdict["approved"], [str(p)[:200] for p in problems][:6]
     except (ShapeError, AgentError) as error:
         log(f"REVIEW skipped, the reviewer reply was not usable ({error}); the code guardrails still apply")
-        return {"approved": True, "problems": []}
+        approved, problems = True, []
+        skipped = "reviewer call failed" if isinstance(error, AgentError) else "reviewer reply not usable"
+    if findings:
+        approved, problems = False, [number_problem(findings)] + problems[:5]
+    return {"approved": approved, "problems": problems, "skipped": skipped}
 
 
 def revise_draft(draft, problems, evidence):
@@ -1103,18 +1113,30 @@ def revise_draft(draft, problems, evidence):
 
 
 def review_and_revise(draft, evidence):
+    """Returns the draft with a review_status: approved, revised, skipped: <reason> or unresolved: <reason>."""
     verdict = review_draft(draft, evidence)
     if verdict["approved"]:
-        log("REVIEW approved the draft")
-        return draft
+        status = f"skipped: {verdict['skipped']}" if verdict["skipped"] else "approved"
+        log(f"REVIEW {'kept the draft without a review' if verdict['skipped'] else 'approved the draft'} (review_status={status})")
+        return dict(draft, review_status=status)
     log("REVIEW found problems: " + "; ".join(verdict["problems"]))
+    problems, status = verdict["problems"], "unresolved: no revision allowed"
     for _ in range(MAX_REVISIONS):
         try:
-            draft = revise_draft(draft, verdict["problems"], evidence)
+            draft = revise_draft(draft, problems, evidence)
             log("REVIEW: the agent revised its draft once")
         except (ShapeError, AgentError) as error:
             log(f"REVIEW: the revision was not usable ({error}); keeping the first draft")
-    return draft
+            status = "unresolved: revision not usable"
+            continue
+        findings = unsupported_numbers(draft["message"] + " " + draft["reasoning"], evidence_text(evidence))
+        if not findings:   # the number check runs on every revision; the AI reviewer does not run again
+            status = "revised"
+            break
+        status = "unresolved: " + number_problem(findings)
+        problems = [number_problem(findings)]
+    log(f"REVIEW ended (review_status={status})")
+    return dict(draft, review_status=status)
 
 
 # ==============================================================================================

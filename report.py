@@ -1,7 +1,8 @@
 """Executive intelligence brief for the Crypto Watch Agent.
 
-One self-contained HTML page (interactive charts: plotly.js from a CDN) and a short HTML email that carries the same
-top three headlines. It reuses the agent's own functions, so every number is the number the agent saw.
+One self-contained HTML page (interactive charts: plotly.js from a CDN) and an HTML email whose body carries the brief itself
+(emailbody.py draws it with tables, because an email program runs no scripts). It reuses the agent's own functions, so every
+number is the number the agent saw.
 
 Who writes what, stated on the page itself:
   - Computed by code: prices, the three metrics, the ranks, the headlines and the monitoring triggers.
@@ -20,10 +21,12 @@ import argparse
 import html
 import json
 import math
+import os
 import sys
 from datetime import datetime, timezone
 
 import agent
+import emailbody
 import insights
 import sources
 
@@ -600,7 +603,16 @@ footer .by .credit{font-size:18px}
 @media print{body{background:#fff;color:#111}.track{animation:none}.card,.tile,.hl,.score,.panel{break-inside:avoid}}
 """
 
-RAG_URL = "http://127.0.0.1:8765/"      # the local Ask page: python rag_server.py
+RAG_URL = "http://127.0.0.1:8765/"      # the local Ask page: start_ask_page.bat or python rag_server.py
+ATTACHMENT_NAME = "crypto-watch-executive-brief.html"
+LAUNCHER = "start_ask_page.bat"
+
+
+def public_url(name):
+    """An https address the owner has published, from an environment variable (a GitHub repository variable in the workflow).
+    Anything else, including an empty value, is ignored, so the email never carries a link that cannot work."""
+    value = os.environ.get(name, "").strip()
+    return value if value.startswith("https://") and len(value) <= 300 and not any(ch.isspace() or ch in '"<>' for ch in value) else None
 FONTS_URL = ("https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600;700"
              "&family=JetBrains+Mono:wght@500;700&display=swap")
 
@@ -713,7 +725,16 @@ def brand_bar(data, as_of):
             f'<span class="live{tone_class(tone)}"><span class="dot"></span>{shown}</span>'
             f'<span class="byline">Created by <span class="credit">{esc(CREDIT)}</span></span></div>'
             f'<div class="right"><span>{esc(data["generated_long"])}</span><span>Data to the {esc(as_of)} UTC close</span>'
-            f'<a href="{RAG_URL}" title="Opens the local Ask page. Start it with: python rag_server.py">Ask the playbook &rarr;</a></div></div></div>')
+            f'{ask_link()}</div></div></div>')
+
+
+def ask_link():
+    """The Ask page link. A published address (ASK_URL) works from anywhere; the local one only while python rag_server.py is running."""
+    hosted = public_url("ASK_URL")
+    if hosted:
+        return f'<a href="{esc(hosted)}">Ask the playbook &rarr;</a>'
+    return (f'<a href="{RAG_URL}" title="Runs on your computer only: double-click {LAUNCHER} (or run python rag_server.py), then this link opens">'
+            'Ask the playbook &rarr;</a>')
 
 
 def ticker_items(data):
@@ -784,10 +805,11 @@ def top3_section(data):
     return section("Top 3 headlines", f'<div class="top3">{cards}</div>', '<span class="chip code">Computed by code</span>')
 
 
-def stat_tiles(data):
+def tile_list(data):
+    """The four headline numbers as (label, value, sub-line, tone). The page and the email show the same ones."""
     ok = good(data)
     if not ok:
-        return ""
+        return []
     events = data.get("events")
     tiles = [("Coins at the alert rank", f"{len(breaching(data))} of {len(data['coins'])}", f"Alert rank {agent.ALERT_RANK:g}, near threshold {NEAR_RANK:g}", "")]
     widest = max(ok, key=lambda c: abs(c["summary"]["dist_from_30d_avg_pct"]))
@@ -808,6 +830,13 @@ def stat_tiles(data):
         tiles.append(("Longest current run", f"Day {run}", f"{coin} at the alert rank; {typical}", "amb"))
     else:
         tiles.append(("Data reliability", f"{len(ok)} of {len(data['coins'])}", "coins with complete, current Kraken candles", ""))
+    return tiles
+
+
+def stat_tiles(data):
+    tiles = tile_list(data)
+    if not tiles:
+        return ""
     body = "".join(f'<div class="tile" style="animation-delay:{i * 100}ms"><span class="cap">{esc(k)}</span><span class="v {cls}">{esc(v)}</span><span class="s">{esc(sub)}</span></div>'
                    for i, (k, v, sub, cls) in enumerate(tiles))
     return f'<div class="tiles">{body}</div>'
@@ -1081,33 +1110,45 @@ def base_rate_section(data):
             'These are in-sample counts on past data and say nothing about what comes next.</p></section>')
 
 
-def watch_section(data):
-    rows = []
-    columns = [("distance", "up", "above"), ("distance", "down", "below"), ("volatility", "up", "above"), ("volatility", "down", "below"), ("drawdown", "down", "below")]
-    for c in good(data):
-        lv = c.get("levels")
-        if not lv:
-            continue
-        last = c["summary"]["last_close"]
-        cells = []
-        for metric, key, side in columns:
-            level = lv[metric][key] if lv.get(metric) and key in lv[metric] else "none"
-            cells.append("n/a" if level == "none" else _level_cell(level, last, side))
-        rows.append(f'<tr><td><b>{esc(c["coin"])}</b><br><span class="muted">last {_price(last)}</span></td>'
-                    + "".join(f'<td class="num">{esc(x)}</td>' for x in cells) + "</tr>")
-    if not rows:
-        return ""
-    levels = ('<table><tr><th>Coin</th><th class="num">Distance: close above</th><th class="num">Distance: close below</th>'
-              '<th class="num">Volatility: close above</th><th class="num">Volatility: close below</th><th class="num">Drawdown: close below</th></tr>'
-              + "".join(rows) + "</table>")
-    days = max((c["levels"]["history_days"] for c in good(data) if c.get("levels")), default=0)
-    scenarios_rows = [
+def watch_scenarios():
+    return [
         ("Stress persists", f"A metric that is at rank {agent.ALERT_RANK:g} or higher stays there after the next completed day.",
          f"The agent stays quiet for that coin: it is in the last {agent.HISTORY_LIMIT} decisions.", f"The rank falls below {NEAR_RANK:g}."),
         ("Back to normal", f"Every rank of a coin is below {NEAR_RANK:g}.", "The coin reads as calm. No alert.", f"Any rank returns to {agent.ALERT_RANK:g} or higher."),
         ("A new breach", "A coin that has not breached closes beyond one of the levels above.", "The next daily run sends one brief alert for that coin and cites the playbook rule.",
          "The close stays between the levels, or the candle or data is not valid."),
     ]
+
+
+LEVEL_COLUMNS = [("distance", "up", "above"), ("distance", "down", "below"), ("volatility", "up", "above"), ("volatility", "down", "below"), ("drawdown", "down", "below")]
+
+
+def level_rows(data):
+    """(coin, last price text, five level texts) for each coin that has trigger levels. The page and the email show the same ones."""
+    rows = []
+    for c in good(data):
+        lv = c.get("levels")
+        if not lv:
+            continue
+        last = c["summary"]["last_close"]
+        cells = []
+        for metric, key, side in LEVEL_COLUMNS:
+            level = lv[metric][key] if lv.get(metric) and key in lv[metric] else "none"
+            cells.append("n/a" if level == "none" else _level_cell(level, last, side))
+        rows.append((c["coin"], _price(last), cells))
+    return rows
+
+
+def watch_section(data):
+    rows = [f'<tr><td><b>{esc(coin)}</b><br><span class="muted">last {last}</span></td>' + "".join(f'<td class="num">{esc(x)}</td>' for x in cells) + "</tr>"
+            for coin, last, cells in level_rows(data)]
+    if not rows:
+        return ""
+    levels = ('<table><tr><th>Coin</th><th class="num">Distance: close above</th><th class="num">Distance: close below</th>'
+              '<th class="num">Volatility: close above</th><th class="num">Volatility: close below</th><th class="num">Drawdown: close below</th></tr>'
+              + "".join(rows) + "</table>")
+    days = max((c["levels"]["history_days"] for c in good(data) if c.get("levels")), default=0)
+    scenarios_rows = watch_scenarios()
     body = "".join(f"<tr><td><b>{esc(a)}</b></td><td>{esc(b)}</td><td>{esc(c)}</td><td>{esc(d)}</td></tr>" for a, b, c, d in scenarios_rows)
     return ('<section class="card"><h2>Conditional watch scenarios<span class="chip watch">CONDITIONS TO MONITOR, NOT PREDICTIONS</span></h2>'
             '<p class="sub">No probability is given and no price is forecast. Each scenario is a condition that can be observed, what the agent does when it happens, '
@@ -1215,6 +1256,25 @@ def reader_questions(data, events):
     return out
 
 
+def too_few_note(events):
+    return (f'Only {events["episodes"]} past alert episodes exist in this history, fewer than the {insights.MIN_EPISODES} needed before '
+            'outcome statistics are shown. Persistence and typical length are not shown either, because they would rest on too few events. Nothing here is a forecast.')
+
+
+def outlook_summary(data, events):
+    return (f'Across {events["episodes"]} alert episodes in the last {history_days(data)} days, the alert rank tends to {"last" if events["again"][0] and events["again"][0] >= 50 else "end quickly"}, '
+            'but the price moves that follow are spread widely. The rank describes the regime. It does not call the next move.')
+
+
+def trust_points(data, events):
+    return [
+        f"Small sample: {events['episodes']} episodes, and the coins tend to breach together, so there are fewer independent events than it looks.",
+        f"{history_days(data)} days of daily data cover one stretch of the market. A different regime can behave differently.",
+        "Ranks are relative to each coin's own past, not to the wider market or to fundamentals.",
+        "No fees, spreads or slippage are included in any return shown.",
+    ]
+
+
 def outlook_section(data):
     events = data.get("events")
     if not events:
@@ -1223,14 +1283,11 @@ def outlook_section(data):
     ok = good(data)
     ranked = max((len((c.get("base_rate") or {}).get("flags") or []) for c in ok), default=0)
     if not events["enough"]:
-        note = (f'<div class="card"><p class="sub" style="margin:0">Only {events["episodes"]} past alert episodes exist in this history, fewer than the {insights.MIN_EPISODES} needed before '
-                'outcome statistics are shown. Persistence and typical length are not shown either, because they would rest on too few events. Nothing here is a forecast.</p></div>')
+        note = f'<div class="card"><p class="sub" style="margin:0">{esc(too_few_note(events))}</p></div>'
         return section("What the history says", note, chip)
     tiles = "".join(f'<div class="tile" style="animation-delay:{i * 100}ms"><span class="cap">{esc(k)}</span><span class="v amb">{esc(v)}</span><span class="s">{esc(s1)}</span>'
                     f'<span class="s">{esc(s2)}</span></div>' for i, (k, v, s1, s2) in enumerate(outlook_tiles(events)))
-    after = events["after_episode"].get(30) or events["after_episode"].get(7)
-    summary = (f'Across {events["episodes"]} alert episodes in the last {history_days(data)} days, the alert rank tends to {"last" if events["again"][0] and events["again"][0] >= 50 else "end quickly"}, '
-               'but the price moves that follow are spread widely. The rank describes the regime. It does not call the next move.')
+    summary = outlook_summary(data, events)
     charts_row = (
         '<div class="row2">'
         '<div class="panel"><h3>How many days the alert rank lasts</h3><p class="sub">Of all days at the alert rank, the share that is at it again k days later. Pooled over the coins.</p>'
@@ -1241,12 +1298,7 @@ def outlook_section(data):
         f'<p class="sub" style="margin:0">The boxes overlap almost everywhere. With {(events["after_episode"].get(7) or {}).get("n", 0)} episode starts, and coins that move together, this is a hint about spread, not a model of direction.</p></div>'
         '</div>')
     questions = "".join(f'<div class="tile"><span class="qn">0{i + 1}</span><h4>{esc(q)}</h4><p>{esc(a)}</p></div>' for i, (q, a) in enumerate(reader_questions(data, events)))
-    trust = [
-        f"Small sample: {events['episodes']} episodes, and the coins tend to breach together, so there are fewer independent events than it looks.",
-        f"{history_days(data)} days of daily data cover one stretch of the market. A different regime can behave differently.",
-        "Ranks are relative to each coin's own past, not to the wider market or to fundamentals.",
-        "No fees, spreads or slippage are included in any return shown.",
-    ]
+    trust = trust_points(data, events)
     body = (f'<p class="callout">{esc(outlook_headline(events))}</p><p class="deck" style="font-size:18px">{esc(summary)}</p>'
             f'<div class="st">{tiles}</div>{charts_row}'
             f'<div class="sh" style="margin-top:8px"><h2 style="font-size:24px">Five questions this data raises</h2><span class="rule"></span></div><div class="qs">{questions}</div>'
@@ -1323,69 +1375,242 @@ def build_html(data):
 
 
 # ------------------------------------------------------------------------------------------------
-# 5. Email (inline styles only: email programs ignore scripts and most CSS)
+# 5. Email: the brief itself is the body (emailbody.py draws it with tables and inline styles)
 # ------------------------------------------------------------------------------------------------
-def build_email(data):
+STRIP_DAYS = 30
+HEAT_NAMES = ["Volatility", "Vs 30-day avg", "Max drawdown", "Volume (context)", "Rel. strength (context)"]
+LEVEL_NAMES = ["Distance, close above", "Distance, close below", "Volatility, close above", "Volatility, close below", "Drawdown, close below"]
+PERSIST_MARKS = (1, 2, 3, 5, 7, 14, 21)
+
+
+def _tone(rank, two_sided=False):
+    if two_sided:
+        return "hi" if rank >= agent.ALERT_RANK or rank <= agent.UNUSUAL_LOW else "mid" if rank >= NEAR_RANK or rank <= 100 - NEAR_RANK else "lo"
+    return "hi" if rank >= agent.ALERT_RANK else "mid" if rank >= NEAR_RANK else "lo"
+
+
+def _rank(rank, two_sided=False):
+    return {"text": f"{rank:.1f}", "tone": _tone(rank, two_sided)}
+
+
+def _strip_level(rank):
+    return 4 if rank >= agent.ALERT_RANK else 3 if rank >= NEAR_RANK else 2 if rank >= 70 else 1 if rank >= 40 else 0
+
+
+def _heat_facts(data):
+    strength = {x["coin"]: x["rank"] for x in (data.get("cross") or {}).get("relative_strength", [])}
+    rows = []
+    for c in good(data):
+        s, ctx = c["summary"], c["summary"].get("context", {})
+        values = [s["ranks"]["volatility"], s["ranks"]["distance"], s["ranks"]["drawdown"], ctx.get("volume_rank"), strength.get(c["coin"])]
+        cells = [{"text": "n/a", "tone": "none"} if v is None else {"text": f"{v:.1f}", "tone": _tone(max(v, 100.0 - v) if i == 4 else v)} for i, v in enumerate(values)]
+        rows.append({"coin": c["coin"], "cells": cells})
+    return {"columns": HEAT_NAMES, "rows": rows, "alert": f"{agent.ALERT_RANK:g}", "near": f"{NEAR_RANK:g}"} if rows else None
+
+
+def _history_facts(data):
+    rows = []
+    for c in good(data):
+        ranks = [v for v in (c.get("rank_top") or []) if v is not None][-STRIP_DAYS:]
+        if ranks:
+            rows.append({"coin": c["coin"], "cells": [_strip_level(v) for v in ranks], "now": f"{ranks[-1]:.1f}", "peak": f"{max(ranks):.1f}"})
+    if not rows:
+        return None
+    days = min(len(r["cells"]) for r in rows)
+    for r in rows:
+        r["cells"] = r["cells"][-days:]
+    return {"rows": rows, "days": days, "note": ("Each block is one day, the oldest on the left. It shows the highest of a coin's three ranks that day. "
+                                                 f"Red is rank {agent.ALERT_RANK:g} or higher, amber is {NEAR_RANK:g} to below {agent.ALERT_RANK:g}, grey is ordinary.")}
+
+
+def _ai_facts(data):
+    decision = latest_decision(data)
+    if decision is None:
+        return {"note": data.get("decisions_note") or "No decision has been saved to the Sheet yet."}
+    blocked = str(decision.get("blocked_reason") or "")
+    if decision.get("message"):
+        message = decision["message"]
+    elif blocked:
+        message = "The agent's message was removed by a guardrail (see the guardrail result below)."
+    else:
+        message = "No alert message with this decision: the agent found nothing new to alert on."
+    cross = agreement(data)
+    return {"message": message, "reasoning": decision.get("reasoning") or "Not available. Update apps_script/Code.gs and redeploy it to include the AI's reasoning here.",
+            "sources": ", ".join(decision.get("sources") or []) or "none", "blocked": blocked, "verdict": "blocked" if blocked else "passed",
+            "cross": (("Consistent" if cross[0] else "Different"), cross[1]) if cross is not None else None,
+            "facts": [f"Model: {agent.MODEL} on Groq", f"Version: {decision.get('version') or 'unknown'}", f"Decided: {decision.get('time') or 'unknown'}",
+                      f"Alert: {'yes' if decision.get('alert') else 'no'}"]}
+
+
+def _outlook_facts(data):
+    events = data.get("events")
+    if not events:
+        return None
+    if not events["enough"]:
+        return {"note": too_few_note(events)}
+    again = events["again"]
+    persist = [(f"{k} day{'s' if k > 1 else ''} later", again[k - 1]) for k in PERSIST_MARKS if k <= len(again) and again[k - 1] is not None]
+    outcomes = []
+    for h in insights.HORIZONS:
+        st = events["after_episode"].get(h)
+        if st:
+            outcomes.append({"label": f"{h} days later", "median": _sign(st["median"]), "middle": f"{_band(st['q1'])} to {_band(st['q3'])}", "range": f"{_band(st['low'])} to {_band(st['high'])}", "n": st["n"]})
+    seven = (events["after_episode"].get(7) or {}).get("n", 0)
+    return {"headline": outlook_headline(events), "summary": outlook_summary(data, events),
+            "tiles": [{"label": k, "value": v, "sub": s1, "sub2": s2, "tone": "amb"} for k, v, s1, s2 in outlook_tiles(events)],
+            "persist": persist, "persist_note": "Of all days at the alert rank, the share that is at it again some days later. Pooled over the coins.",
+            "outcomes": outcomes, "outcomes_note": f"Coin returns after an episode starts, from {seven} episode starts at 7 days. A hint about spread, not a model of direction.",
+            "trust": trust_points(data, events)}
+
+
+def _context_facts(data):
+    cross = data.get("cross") or {}
+    strength = {x["coin"]: x for x in cross.get("relative_strength", [])}
+    rows = []
+    for c in good(data):
+        ctx = c["summary"].get("context")
+        if not ctx:
+            continue
+        lines = [("Change 30d / 60d", f"{ctx['ret_30d_pct']:+.2f}% / {ctx['ret_60d_pct']:+.2f}%", None)]
+        if "volume_rank" in ctx:
+            lines.append(("Volume vs 30-day average", f"{ctx['volume_ratio_30d']:.2f}x", _rank(ctx["volume_rank"])))
+        rs = strength.get(c["coin"])
+        if rs:
+            lines.append(("Relative strength vs group", f"{rs['vs_group_pct']:+.2f} pts", _rank(rs["rank"], True)))
+        rows.append({"coin": c["coin"], "trend": ctx["trend"], "lines": lines})
+    if not rows:
+        return None
+    pairs, pairs_note = [], ""
+    if cross.get("correlations"):
+        flagged = set(cross.get("flags", []))
+        pairs = [{"pair": x["pair"], "corr": f"{x['corr_30d']:+.2f}", "rank": _rank(x["rank"], True),
+                  "reading": "unusual" if "correlation " + x["pair"] in flagged else "normal range"} for x in cross["correlations"]]
+        pairs_note = "How the coins move together: correlation of the last 30 daily returns, ranked against the pair's own history. Near 100 is unusually tight, near 0 unusually loose."
+    elif cross.get("error"):
+        pairs_note = f"Relationships unavailable: {cross['error']}."
+    return {"rows": rows, "pairs": pairs, "pairs_note": pairs_note,
+            "note": "These describe the past and never raise an alert on their own. Volume is traded volume on Kraken. Relative strength is a coin's 30-day return minus the group average."}
+
+
+def _market_lines(piece):
+    def gone(x):
+        return "unavailable: " + (x.get("unavailable", "unavailable") if isinstance(x, dict) else "unavailable")
+    liq, der, iv, wide, check = (piece.get(k) for k in ("liquidity", "derivatives", "implied_volatility", "market_wide", "price_check"))
+    lines = []
+    lines.append(("Liquidity (Kraken)", f"spread {liq['spread_pct']:.4f}%, bids {_usd(liq['bid_depth_usd'])}, asks {_usd(liq['ask_depth_usd'])} within {liq['depth_band_pct']:g}%" if sources.is_data(liq) else gone(liq)))
+    if sources.is_data(der):
+        oi = _usd(der["open_interest_usd_approx"]) if der.get("open_interest_usd_approx") else f"{der['open_interest']:,.0f} contracts"
+        lines.append(("Funding, open interest", f"{der['funding_rate_pct_per_hour']:+.4f}% per hour, {der['funding_pays']}, open interest {oi}"))
+    else:
+        lines.append(("Funding, open interest", gone(der)))
+    if sources.is_data(iv):
+        rank = f"rank {iv['rank_1y']:.1f} vs past year" if iv.get("rank_1y") is not None else f"no rank yet ({iv['history_days']} days)"
+        lines.append(("Implied volatility (DVOL)", f"{iv['implied_vol_pct']:.1f}% annualised, {rank}"))
+    else:
+        lines.append(("Implied volatility (DVOL)", gone(iv)))
+    if sources.is_data(wide) and "market_volume_rank" in wide:
+        lines.append(("Market-wide volume", f"{_usd(wide['volume_24h_usd'])} in 24h, {wide['market_volume_ratio_30d']:.2f}x its 30-day average, rank {wide['market_volume_rank']:.1f}"))
+    elif sources.is_data(wide):
+        lines.append(("Market-wide volume", f"{_usd(wide['volume_24h_usd'])} in 24h, history unavailable"))
+    else:
+        lines.append(("Market-wide volume", gone(wide)))
+    if sources.is_data(check):
+        lines.append(("Price check", f"{check['difference_pct']:+.2f}% ({'agree' if check['agree'] else 'differ'}), Kraken {_price(check['kraken_mid_usd'])} vs CoinGecko {_price(check['coingecko_price_usd'])}"))
+    else:
+        lines.append(("Price check", gone(check)))
+    return lines
+
+
+def _market_facts(data):
+    context = data.get("context") or {}
+    if "error" in context or not context.get("coins"):
+        return {"note": f"Unavailable: {context['error']}."} if context.get("error") else None
+    fng = context.get("sentiment")
+    mood = (f"Fear and greed index, whole market: {fng['value']} of 100, {fng['label']}; {fng['change_vs_yesterday']:+d} since yesterday, 30-day mean {fng['mean_prior_30d']:.0f}."
+            if sources.is_data(fng) else "Fear and greed index: unavailable.")
+    flags = context.get("flags") or []
+    return {"rows": [{"coin": coin, "lines": _market_lines(piece)} for coin, piece in context["coins"].items()],
+            "intro": "Extra free sources on how the market is positioned. Context only: they never raise an alert, and a field that cannot be read says so. A positive funding rate means longs pay shorts. Implied volatility is what option prices imply, not a forecast.",
+            "mood": mood, "flags": ("Unusual today: " + "; ".join(flags) + ".") if flags else "Unusual today: nothing among the sources that responded."}
+
+
+def _decision_facts(data, limit=5):
+    out = []
+    for d in reversed(data["decisions"][-limit:]):
+        message = str(d.get("message") or "")
+        out.append({"time": str(d.get("time", "")).replace("T", " ")[:16], "alert": bool(d.get("alert")), "result": "ALERT" if d.get("alert") else "no alert",
+                    "coins": ", ".join(d.get("coins") or []) or "no coin", "message": message if len(message) <= 90 else message[:87] + "..."})
+    return out
+
+
+def email_facts(data):
+    """The plain facts the email shows. Everything comes from the same functions the page uses, so the two cannot disagree."""
     label, tone, _ = status_of(data)
-    pill = {"red": ("#B3261E", "#FFFFFF"), "green": ("#1F6F4A", "#FFFFFF"), "grey": ("#4A5568", "#FFFFFF")}[tone]
-    shown = {"ALERT": "ALERT", "CALM": "CALM MARKET", "NO DATA": "NO DATA"}[label]
     as_of = max((c["summary"]["as_of"] for c in good(data)), default="unavailable")
     deck = hero_deck(data)
-    top = "".join(
-        f'<tr><td style="padding:10px 0;border-top:1px solid #E3E7EE;vertical-align:top;width:34px;font-family:Consolas,Menlo,monospace;font-size:13px;color:#B7791F">0{i + 1}</td>'
-        f'<td style="padding:10px 0;border-top:1px solid #E3E7EE"><div style="font-size:11px;font-weight:700;letter-spacing:.1em;color:#5B6678;text-transform:uppercase">{esc(item["kicker"])}</div>'
-        f'<div style="font-size:17px;line-height:1.35;font-weight:600;color:#0A0E16;margin-top:2px">{esc(item["text"])}</div></td></tr>'
-        for i, item in enumerate(insights.top_headlines(data["coins"], data.get("context"))))
-    cells = []
-    ok = good(data)
-    if ok:
-        cells.append(("At the alert rank", f"{len(breaching(data))} of {len(data['coins'])}"))
-        widest = max(ok, key=lambda c: abs(c["summary"]["dist_from_30d_avg_pct"]))
-        cells.append((f"{widest['coin']} vs 30-day avg", f"{widest['summary']['dist_from_30d_avg_pct']:+.2f}%".replace("-", MINUS)))
-        mood = insights._mood(data.get("context"))
-        if mood:
-            cells.append(("Fear and Greed", f"{mood['value']}"))
-    strip = "".join(f'<td style="padding:12px 8px;text-align:center;background:#F3F5F9;border-radius:6px"><div style="font-size:11px;letter-spacing:.08em;color:#5B6678;text-transform:uppercase">{esc(k)}</div>'
-                    f'<div style="font-size:24px;font-weight:700;color:#0A0E16;margin-top:2px">{esc(v)}</div></td><td style="width:8px"></td>' for k, v in cells)
-    decision = latest_decision(data)
-    ai = ""
-    if decision and decision.get("message"):
-        ai = (f'<tr><td style="padding:6px 28px 18px"><div style="border-left:4px solid #7C5CD6;background:#F5F2FF;padding:12px 16px;border-radius:6px">'
-              f'<div style="font-size:11px;font-weight:700;color:#5B3FB0;letter-spacing:.08em">AI ANALYSIS (WRITTEN BY AI, CHECKED BY CODE)</div>'
-              f'<div style="margin-top:6px;font-size:15px;line-height:1.45;color:#0A0E16">{esc(decision["message"])}</div></div></td></tr>')
-    demo = '<div style="color:#F6B73C;font-weight:700;margin-top:8px">DEMO DATA: synthetic prices</div>' if data.get("demo") else ""
-    return (
-        f'<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent">{esc(deck)}</div>'
-        '<div style="background:#E9EDF3;padding:18px;font-family:Segoe UI,Helvetica,Arial,sans-serif;color:#0A0E16">'
-        '<table role="presentation" width="640" align="center" style="max-width:640px;width:100%;background:#FFFFFF;border-radius:10px;border-collapse:collapse;overflow:hidden">'
-        '<tr><td style="background:#0A0E16;padding:26px 28px;color:#F2F4F8">'
-        f'<div style="font-size:12px;letter-spacing:.16em;font-weight:700;color:#F6B73C">CRYPTO WATCH &middot; DAILY BRIEF &middot; {esc(as_of)} UTC CLOSE</div>'
-        f'<div style="font-size:30px;line-height:1.1;font-weight:800;margin-top:10px;text-transform:uppercase">{esc(hero_title(data))}</div>'
-        f'<div style="margin-top:12px;display:inline-block;background:{pill[0]};color:{pill[1]};padding:5px 12px;border-radius:4px;font-weight:700;font-size:12px;letter-spacing:.1em">{shown}</div>{demo}</td></tr>'
-        f'<tr><td style="padding:18px 28px 6px;font-size:16px;line-height:1.5;color:#2A3446">{esc(deck)}</td></tr>'
-        f'<tr><td style="padding:10px 28px 4px"><div style="font-size:12px;font-weight:700;color:#0A0E16;letter-spacing:.1em">TOP 3 HEADLINES</div>'
-        f'<table role="presentation" width="100%" style="border-collapse:collapse;margin-top:8px">{top}</table></td></tr>'
-        f'<tr><td style="padding:14px 28px 6px"><table role="presentation" width="100%" style="border-collapse:separate"><tr>{strip}</tr></table></td></tr>{ai}'
-        '<tr><td style="padding:6px 28px 6px;font-size:14px;line-height:1.5;color:#2A3446"><b>Open the attached file</b> (<i>crypto-watch-executive-brief.html</i>) in a browser for the interactive charts, '
-        'the history study and the full tables. To ask the playbook a question, run <span style="font-family:Consolas,Menlo,monospace">python rag_server.py</span> on your computer and open '
-        f'<span style="font-family:Consolas,Menlo,monospace">{esc(RAG_URL)}</span>.</td></tr>'
-        f'<tr><td style="padding:14px 28px 22px;font-size:12px;line-height:1.5;color:#5B6678;border-top:1px solid #E3E7EE">Created by <b>{esc(CREDIT)}</b><br>'
-        'Live market-data analysis and decision support. Not investment advice: no forecast and no recommendation. Every number is computed by code from Kraken daily candles and the other free sources named in the attached report.</td></tr>'
-        '</table></div>')
+    scoreboard = []
+    for c in data["coins"]:
+        if "error" in c:
+            scoreboard.append({"coin": c["coin"], "error": c["error"]})
+            continue
+        s = c["summary"]
+        scoreboard.append({"coin": c["coin"], "name": coin_name(c["coin"]), "status": coin_status(s), "error": None,
+                           "price": f"{_price(s['last_close'])}, day {_sign(s['daily_return_pct'], 2)}",
+                           "lines": [{"label": SCORE_LABELS[m], "value": insights.metric_value(s, m), "rank": _rank(s["ranks"][m])} for m in agent.METRICS]})
+    levels = level_rows(data)
+    days = max((c["levels"]["history_days"] for c in good(data) if c.get("levels")), default=0)
+    events = data.get("events")
+    return {
+        "title": hero_title(data), "deck": deck, "preheader": deck[:140], "as_of": as_of, "generated": data["generated"], "credit": CREDIT, "demo": bool(data.get("demo")),
+        "status": {"label": {"ALERT": "ALERT", "CALM": "CALM MARKET", "NO DATA": "NO DATA"}[label], "tone": tone},
+        "method": f"Each coin is ranked against its own past {history_days(data)} days. This describes how unusual today is. It is not a forecast of what comes next.",
+        "links": {"report_url": public_url("REPORT_URL"), "ask_url": public_url("ASK_URL"), "attachment": ATTACHMENT_NAME, "launcher": LAUNCHER},
+        "scoreboard": scoreboard,
+        "scoreboard_note": f"Alert at rank {agent.ALERT_RANK:g} or higher. Near threshold from {NEAR_RANK:g} up to {agent.ALERT_RANK:g}.",
+        "headlines": insights.top_headlines(data["coins"], data.get("context")),
+        "tiles": [{"label": k, "value": v, "sub": sub, "tone": tone_} for k, v, sub, tone_ in tile_list(data)],
+        "heat": _heat_facts(data), "history": _history_facts(data), "ai": _ai_facts(data), "outlook": _outlook_facts(data),
+        "questions": reader_questions(data, events) if events and events["enough"] else [],
+        "watch": {"lines": triggers(data)},
+        "levels": ({"columns": LEVEL_NAMES, "rows": [{"coin": coin, "last": last, "cells": cells} for coin, last, cells in levels],
+                    "note": f"A close between the two levels of a metric leaves it below the alert rank. The levels use up to {days} days of each coin's own history and are approximate: "
+                            "they stop being valid once the next candle completes."} if levels else None),
+        "scenarios": watch_scenarios(), "context": _context_facts(data), "market": _market_facts(data), "decisions": _decision_facts(data),
+        "disclaimer_lead": "Live market-data analysis and decision support. Not investment advice.",
+        "disclaimer": ("This brief contains no price forecast and makes no recommendation. Every number is computed by code from Kraken daily candles, with market context from "
+                       "Kraken Futures, Deribit, CoinGecko and alternative.me where they responded. Thresholds are descriptive conventions documented in playbook.md."),
+    }
+
+
+def build_email_parts(data, budget=emailbody.EMAIL_BUDGET):
+    """(html, dropped sections): the email body, kept under `budget` bytes by leaving out the least important sections."""
+    return emailbody.render(email_facts(data), budget)
+
+
+def build_email(data, budget=emailbody.EMAIL_BUDGET):
+    return build_email_parts(data, budget)[0]
 
 
 def send_email(data, page):
     subject = insights.subject_line(data["coins"])[:200]
-    try:
-        agent.sheet_post({"action": "report", "subject": subject, "summary_html": build_email(data), "html": page})
-    except agent.AgentError as error:
-        text = str(error)
-        hint = (" The deployed web app is the older version. Update apps_script/Code.gs from the repository and redeploy it (Manage deployments > pencil > New version)."
-                if ("INVALID_ACTION" in text or "INVALID_REQUEST" in text) else "")
-        print(f"::warning::Report email not sent: {text}.{hint}", flush=True)
-        return False
-    print(f"[report] email sent: {subject}", flush=True)
-    return True
+    for budget in (emailbody.EMAIL_BUDGET, emailbody.COMPACT_BUDGET):
+        body, dropped = build_email_parts(data, budget)
+        try:
+            agent.sheet_post({"action": "report", "subject": subject, "summary_html": body, "html": page})
+        except agent.AgentError as error:
+            text = str(error)
+            if "INVALID_PAYLOAD" in text and budget == emailbody.EMAIL_BUDGET and len(body) > emailbody.COMPACT_BUDGET:
+                print("::warning::The deployed web app limits the email body to 30,000 characters (older Code.gs). Sending the shorter body instead. "
+                      "Update apps_script/Code.gs and redeploy it (Manage deployments > pencil > New version) for the full body.", flush=True)
+                continue
+            hint = (" The deployed web app is the older version. Update apps_script/Code.gs from the repository and redeploy it (Manage deployments > pencil > New version)."
+                    if ("INVALID_ACTION" in text or "INVALID_REQUEST" in text) else "")
+            print(f"::warning::Report email not sent: {text}.{hint}", flush=True)
+            return False
+        print(f"[report] email body {len(body.encode('utf-8')) // 1024} KB, sections left out: {', '.join(dropped) or 'none'}", flush=True)
+        print(f"[report] email sent: {subject}", flush=True)
+        return True
+    return False
 
 
 # ------------------------------------------------------------------------------------------------

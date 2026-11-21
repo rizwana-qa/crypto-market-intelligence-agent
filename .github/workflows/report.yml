@@ -1,8 +1,9 @@
 name: Executive report
 
-# Builds the executive intelligence brief right after a successful daily run, and emails it (one email per day, with a subject
-# written from the day's numbers). The last step checks the Ask page's playbook index; the Ask page itself runs on your own
-# computer (python rag_server.py), so your Groq key never leaves it.
+# Builds the executive intelligence brief right after a successful daily run, and emails it: one email per day, with a subject
+# written from the day's numbers. The email body is the brief itself, and the interactive page is attached.
+# The last step checks the Ask page's playbook index. The Ask page itself runs on your own computer (start_ask_page.bat), so your
+# Groq key never leaves it.
 # It can also be started by hand from the Actions tab.
 on:
   workflow_run:
@@ -45,6 +46,10 @@ jobs:
         env:
           SHEET_URL: ${{ secrets.SHEET_URL }}
           COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}   # optional and free (Demo key)
+          # Optional repository variables (Settings > Secrets and variables > Actions > Variables). When one is set to an https address,
+          # the email shows a button for it. When it is empty, the email says plainly what to open instead of showing a link that cannot work.
+          REPORT_URL: ${{ vars.REPORT_URL }}
+          ASK_URL: ${{ vars.ASK_URL }}
         run: python report.py --out executive-report.html --email
 
       # The playbook is searched by the Ask page (python rag_server.py). This step proves the index still finds the right section for

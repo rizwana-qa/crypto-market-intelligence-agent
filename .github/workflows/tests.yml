@@ -8,6 +8,8 @@ on:
       - "sources.py"
       - "scenarios.py"
       - "report.py"
+      - "emailbody.py"
+      - "start_ask_page.bat"
       - "insights.py"
       - "rag.py"
       - "rag_server.py"
@@ -74,6 +76,9 @@ jobs:
 
       - name: Report tests (offline)
         run: python tests/test_report.py -v
+
+      - name: Email body tests (offline)
+        run: python tests/test_emailbody.py -v
 
       - name: Insights tests (offline)
         run: python tests/test_insights.py -v

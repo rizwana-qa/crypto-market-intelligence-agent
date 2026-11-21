@@ -1214,11 +1214,10 @@ def apply_guardrails(draft, valid_titles, evidence):
             reason = "no valid source: every source must be a real playbook section title"
         elif has_advice_language(draft["message"]):
             reason = "advice language in the message"
-        elif not any(e["tool"] == "get_market_summary" and "error" not in e["result"] for e in evidence):
+        elif not market_summaries(evidence):   # a string, None or list from a tool is not market data (and must not crash this function)
             reason = "no valid market data in this run"
         else:
-            breached = {e["result"].get("coin") for e in evidence
-                        if e["tool"] == "get_market_summary" and "error" not in e["result"] and e["result"].get("breaches")}
+            breached = {summary.get("coin") for summary in market_summaries(evidence) if summary.get("breaches")}
             without = [coin for coin in draft["coins"] if coin not in breached]
             repeated = recently_alerted_coins(evidence)
             if without:

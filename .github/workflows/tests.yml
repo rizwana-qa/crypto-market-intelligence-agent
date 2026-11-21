@@ -107,6 +107,10 @@ jobs:
       - name: Market feature tests (offline)
         run: python tests/test_features.py -v
 
+      # Regression tests for the production-readiness fixes (D-01 to D-20). test_fix_d10.py runs tests/test_codegs_idempotency.js with node.
+      - name: Production-readiness fix tests (offline)
+        run: python -m unittest discover -s tests -p "test_fix_*.py" -v
+
       # Fake market data and fake history, real AI. A failed scenario exits with code 1, so this step turns red.
       # It runs ONLY when you start the workflow by hand (Actions > Tests > Run workflow). A push runs the offline tests above and nothing
       # else, because scenarios with the real AI cost about 23K tokens each and the free Groq cap is 200K tokens a day: a push used to

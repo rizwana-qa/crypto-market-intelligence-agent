@@ -48,7 +48,7 @@ UNUSUAL_LOW = 100.0 - ALERT_RANK  # two-sided context metrics: a rank at or belo
 
 DEFAULT_MODE = "agent"  # "agent" (tool loop) or "planner" (plan first, code runs the steps)
 USE_REVIEWER = False    # the reviewer switch; --reviewer on|off overrides it
-MAX_STEPS = 10          # agent loop: the most AI calls before the run stops with an error (8 before the two context tools)
+MAX_STEPS = 12          # agent loop: the most AI calls before the run stops with an error (8 before the two context tools; a model that calls one tool at a time needs 9 or more)
 MAX_FIX_ATTEMPTS = 2    # how often the AI may be asked again after an invalid answer
 MAX_REVISIONS = 1       # how often the agent may revise after the reviewer found problems
 MAX_PLAN_STEPS = 12     # planner: the most steps a plan may have (3 market + cross-asset + context + stats + history + playbook searches)

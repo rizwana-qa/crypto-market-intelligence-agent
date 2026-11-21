@@ -50,3 +50,15 @@ This log records real events from the build sessions. Read it once and change an
 - The Planner + reviewer live run was cancelled by Groq's rate limit and gave no result. It is recorded as no result, not as a pass.
 - The brief was reviewed as a rendered screenshot. The rank bar chart had clipped labels and overlapping threshold text, so it became a heatmap. The 15-row trigger table became a 3-row matrix.
 
+## 7. More tools, free sources only
+
+**Prompt (in short):** add the extra tools you proposed (liquidity, derivatives, implied volatility, market-wide volume, sentiment, a price cross-check, alert statistics), but I will not use any paid API key.
+
+**Result:** a new `sources.py` that reads only free sources (Kraken order book and Kraken Futures, Deribit DVOL, alternative.me, and CoinGecko through its free Demo key, which is optional), two new agent tools (`get_market_context`, `get_alert_history_stats`) instead of seven so the free Groq token cap is respected, seven playbook sections, four more scenarios, a `context_data` Sheet tab, a market context section in the brief with the sources' attribution, a manual `Data sources check` workflow that uses no AI tokens, and 56 more offline tests.
+
+**What the AI got wrong or I changed:**
+- Adding two tools raised the number of AI calls a loop can need to 9 or more, so the step limit of 8 would have failed a run that calls one tool at a time. The loop limit is now 12 and the plan limit 12.
+- Seven tools would have made every prompt longer and burned the free daily token cap, so related data was merged into one tool.
+- My first test run had three failures. Two were arithmetic slips of my own in the expected values (a DVOL rank that forgot an equal value counts half, and an ask-depth sum that was off by 228). The tests were corrected, not the code. The third was a real bug in the code: a price gap of exactly 1% was flagged as a disagreement because of floating-point noise. It is fixed and tested.
+- The funding rate and open interest units, the XRP futures symbol and CoinGecko's XRP id are not confirmed against the live APIs, because the build environment cannot reach them. The parsers refuse an unclear unit instead of guessing, and the data check prints the raw fields so these points can be settled from a real run.
+

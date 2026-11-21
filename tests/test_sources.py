@@ -503,7 +503,20 @@ class ContextRows(unittest.TestCase):
     def test_values_land_in_the_right_columns(self):
         row = agent.context_rows(self.evidence(), "Agent loop", "t", "1")[0]
         self.assertEqual(row[4], 67210.5)                            # Kraken mid
+        self.assertEqual(row[5], 0.0012)                             # spread %
+        self.assertEqual(row[6], 14.2e6)                             # bid depth within 1%
+        self.assertEqual(row[7], 13.8e6)                             # ask depth within 1%
+        self.assertEqual(row[8], 0.004)                              # funding rate % per hour
         self.assertEqual(row[9], "longs pay shorts")
+        self.assertEqual(row[10], 9.0e8)                             # open interest in USD
+        self.assertEqual(row[11], 46.8)                              # implied volatility %
+        self.assertEqual(row[13], 31.5e9)                            # market volume 24h
+        self.assertEqual(row[14], 1.04)                              # market volume vs 30-day average
+        self.assertEqual(row[15], 44.0)                              # market volume rank
+        self.assertEqual(row[16], 65126.45)                          # CoinGecko price (67210.5 / 1.032)
+        self.assertEqual(row[17], 3.2)                               # price difference %
+        self.assertEqual(row[19], "Neutral")
+        self.assertEqual(row[21], 19)                                # BTC alert episodes
         self.assertEqual(row[12], 48.0)                              # implied vol rank
         self.assertEqual(row[18], 52)                                # fear and greed value
         self.assertEqual(row[20], 8.4)                               # BTC share of alert-rank days

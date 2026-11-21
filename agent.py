@@ -132,8 +132,8 @@ def parse_candles(raw, pair):
     return candles
 
 
-def fetch_candles(pair):
-    """Daily candles for one Kraken pair. Any failure is an error, never a guess."""
+def fetch_rows(pair):
+    """The raw daily candle rows Kraken returns for one pair (8 values each). Any failure is an error, never a guess."""
     last_error = "unknown error"
     for attempt in range(1, 4):
         try:
@@ -156,7 +156,12 @@ def fetch_candles(pair):
     keys = [key for key in body["result"] if key != "last"]  # "last" is a pointer, not candles
     if keys != [RESULT_KEYS[pair]]:
         raise RuntimeError(f"{pair}: unexpected pair key {keys}, expected {RESULT_KEYS[pair]!r}")
-    return parse_candles(body["result"][keys[0]], pair)
+    return body["result"][keys[0]]
+
+
+def fetch_candles(pair):
+    """Daily candles for one Kraken pair, checked. Any failure is an error, never a guess."""
+    return parse_candles(fetch_rows(pair), pair)
 
 
 def completed_closes(candles, now):

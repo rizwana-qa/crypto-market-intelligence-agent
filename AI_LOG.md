@@ -124,3 +124,30 @@ This log records real events from the build sessions. Read it once and change an
 - Mutation testing found two formulas the tests did not pin (one term of the true range, and the sign of a flat day in the signed volume balance). Two tests were added, and all 14 breaks are now caught.
 - My own mutation script left a stale compiled file (a break of the same size, written within the same second), which made a correct test look broken. I re-ran with bytecode caching off.
 
+
+## 13. An interactive executive brief, a headline subject and an honest outlook
+
+**Prompt (in short):** make the HTML report read like a news desk covering remarkable statistics, with charts that are dynamic, the top 3 headlines, and at the bottom a forward-looking analysis as a data scientist would write it. Email it once a day at the end of the run with an impactful subject. Show "Created by Rizwana Zahoor" and nothing else about the course. I asked to see a design preview first, approved it, and then asked for it to be built.
+
+**Result:** `report.py` now draws interactive plotly.js charts (hover, zoom, legend toggle, range tabs) and has a hero, the top 3 headlines, stat tiles and a section called "What the history says". `insights.py` computes the event study, the three headlines and the email subject from the day's numbers. The email carries the headlines and the AI's analysis, with the interactive page attached.
+
+**What the AI got wrong or I changed:**
+- The outlook is not a forecast. On the real history (20 episodes of the alert rank) the rank persists (90.5% at the alert level the next day, 53.3% a week later) but the moves that follow are spread widely (30 days later: median +2.4%, middle half -7.1% to +14.7%, 17 episodes). The page says "Stress is sticky. Direction is not." only because those numbers support it, shows the sample size next to every statistic, prints four caveats and hides the statistics when there are fewer than 8 episodes. I did not add any buy or sell call.
+- My first version of the headline counted rarity as "3 of 690 days". The count was wrong; it is now computed from the coin's history, and a test pins the exact headline text.
+- A test caught a banned word ("long") in a chart heading, so it became "How many days the alert rank lasts". The same check runs on every email subject, with a plain fallback.
+- The plotly range buttons were invisible in the first design, so the page builds its own tabs. A CSS class clash, a "-0%" display, overlapping threshold labels, clipped chart labels and sideways scroll on a phone were fixed after checking the page in a real browser at desktop and phone width.
+- Not solved: on an alert day the Sheet web app also sends its own short alert email, so there are two emails that day. Switching it off needs a change in `Code.gs` and a redeploy, so I left that as a decision.
+
+## 14. The Ask page: RAG over my playbook, running on my own computer
+
+**Prompt (in short):** a premium, executive-level interface where I can ask questions about my playbook, shown as a preview first. Then: implement it, and run it locally.
+
+**Result:** `rag.py` searches the 18 playbook sections with BM25, optionally has the AI write a short answer from the top three, and checks it in code (cited sections must exist and have been retrieved, no advice word, quotes copied word for word by code). `rag_server.py` and `rag_ui.html` serve it on 127.0.0.1 only. `python rag.py --check` runs 26 offline checks and the workflow runs it after each daily report.
+
+**What the AI got wrong or I changed:**
+- Retrieval missed a plain question: "When does the agent raise an alert?" returned the base-rate section, because that section says "never raises an alert". I added a small synonym rule for raise, trigger and fire that applies to the question only, so the playbook and the agent's own search are unchanged. Measured now: the right section is first for 19 of 21 questions and in the top three for all 21. These questions were written against this playbook, so this is a regression test and not an accuracy claim.
+- Screenshots showed three things the tests did not: topic text cut in the middle of a word, no space under the header (a `.wrap` rule overrode the `main` padding), and the answer pushed far down the phone screen by the topic list. All fixed. The related-questions list also offered the question I had just asked.
+- My own browser test failed because the page's Content-Security-Policy blocks string evaluation. That was the policy working, so I changed the test, not the policy.
+- My workflow edit had a colon inside a step name that made the YAML invalid. Validating all three workflow files with a YAML parser caught it before the push.
+- Eight deliberate breaks (advice check off, Host check off, Origin check off, rate limit off, accepting a section that was not retrieved, advice requests not declined, synonyms off, `innerHTML` added) were each caught by a test.
+- Not done: the AI's wording on the real model has not been run, because it needs the key, and the page does not read live numbers.

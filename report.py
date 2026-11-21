@@ -1,18 +1,19 @@
 """Executive intelligence brief for the Crypto Watch Agent.
 
-One self-contained HTML page (charts use plotly.js from a CDN) and a short HTML email that carries the same
-headlines. It reuses the agent's own functions, so every number is the number the agent saw.
+One self-contained HTML page (interactive charts: plotly.js from a CDN) and a short HTML email that carries the same
+top three headlines. It reuses the agent's own functions, so every number is the number the agent saw.
 
 Who writes what, stated on the page itself:
   - Computed by code: prices, the three metrics, the ranks, the headlines and the monitoring triggers.
   - Written by AI: the analysis text, which is the agent's latest decision read back from the Sheet.
   - Checked by code: the guardrails the decision passed (valid playbook sources, no advice wording, market data).
 
-There is no price forecast and no recommendation in this report, on purpose: the project is for education only.
+There is no price forecast and no recommendation in this report, on purpose: it is live market-data analysis and decision support, not investment advice.
+The "what the history says" section is an event study of past data with its sample sizes shown (insights.py), never a prediction.
 
 Usage:
   python report.py                      # live Kraken data + the Sheet history (needs SHEET_URL for the AI analysis)
-  python report.py --email              # also email it through the Apps Script web app (needs the updated Code.gs)
+  python report.py --email              # also email it (subject built from the data) through the Apps Script web app (needs the updated Code.gs)
   python report.py --demo               # synthetic data, clearly labelled, to preview the layout offline
 """
 import argparse
@@ -23,12 +24,14 @@ import sys
 from datetime import datetime, timezone
 
 import agent
+import insights
 import sources
 
 PLOTLY_URL = "https://cdn.plot.ly/plotly-2.35.2.min.js"
 LABELS = {"volatility": "30-day volatility", "distance": "Distance from 30-day average", "drawdown": "30-day max drawdown"}
-COLORS = {"BTC": "#f59e0b", "ETH": "#6366f1", "XRP": "#14b8a6"}
-CHART_DAYS = 90      # length of the price chart
+COLORS = {"BTC": "#F6B73C", "ETH": "#7DA2FF", "XRP": "#5ED0C3"}
+CREDIT = "Rizwana Zahoor"          # the byline on the page, in the email and in the local Ask page
+CHART_DAYS = 240     # candles kept for the price and average charts (the page has range buttons for 30, 60 and 90 and for 60, 120 and 240 days)
 RANK_DAYS = 60       # length of the rank history chart
 NEAR_RANK = 90.0     # same band as playbook.md, "Near threshold"
 DECISION_ROWS = 10
@@ -105,7 +108,6 @@ def analyse(coin, stamps, closes, volumes=None):
     series, _ = agent.metric_series(closes)
     n = len(closes)
     start = max(0, n - CHART_DAYS)
-    base = closes[start]
     rank_dates, rank_top = [], []
     for i in range(max(agent.WINDOW, n - RANK_DAYS), n):
         ranks = agent.ranks_at(series, i)
@@ -115,8 +117,10 @@ def analyse(coin, stamps, closes, volumes=None):
         "coin": coin,
         "summary": summary,
         "base_rate": base_rate(stamps, closes),
+        "closes": list(closes),
+        "stamps": list(stamps),
         "dates": [agent.format_date(t) for t in stamps[start:]],
-        "indexed": [round(c / base * 100, 2) for c in closes[start:]],
+        "closes_recent": [round(c, 6) for c in closes[start:]],
         "rank_dates": rank_dates,
         "rank_top": rank_top,
         "levels": trigger_levels(closes),
@@ -300,14 +304,20 @@ def agreement(data):
 
 
 # ------------------------------------------------------------------------------------------------
-# 3. Charts (plotly.js specs written as plain data)
+# 3. Charts (plotly.js specs written as plain data; the page adds hover, zoom, legend toggles and range buttons)
 # ------------------------------------------------------------------------------------------------
+GRID = "#1F2937"
+MUTED = "#A3ACBD"
+TEXT = "#F2F4F8"
+AMBER = "#F6B73C"
 BASE_LAYOUT = {
-    "margin": {"l": 52, "r": 16, "t": 12, "b": 40}, "height": 330,
+    "margin": {"l": 56, "r": 16, "t": 14, "b": 44}, "height": 340,
     "paper_bgcolor": "rgba(0,0,0,0)", "plot_bgcolor": "rgba(0,0,0,0)",
-    "font": {"family": "Inter, Segoe UI, Roboto, Arial, sans-serif", "size": 12, "color": "#334155"},
-    "legend": {"orientation": "h", "y": -0.18}, "hovermode": "x unified",
-    "xaxis": {"gridcolor": "#eef2f7"}, "yaxis": {"gridcolor": "#e8edf4", "zeroline": False},
+    "font": {"family": "Inter, Segoe UI, Roboto, Arial, sans-serif", "size": 12, "color": MUTED},
+    "legend": {"orientation": "h", "y": -0.2, "font": {"color": TEXT}}, "hovermode": "x unified",
+    "hoverlabel": {"bgcolor": "#0A0E16", "bordercolor": GRID, "font": {"color": TEXT}},
+    "xaxis": {"gridcolor": GRID, "linecolor": GRID, "zeroline": False},
+    "yaxis": {"gridcolor": GRID, "linecolor": GRID, "zeroline": False},
 }
 
 
@@ -331,12 +341,18 @@ def threshold_lines(y_value, color, label=None, dash="dash"):
     return shape, note
 
 
+def range_tabs(labels, per_range):
+    """What the page needs to draw range buttons: one group of traces is visible at a time. per_range: how many traces each range owns."""
+    total = per_range * len(labels)
+    return [{"label": label, "visible": [per_range * i <= t < per_range * (i + 1) for t in range(total)]} for i, label in enumerate(labels)]
+
+
 HEAT_COLUMNS = [("Volatility", "volatility"), ("Vs 30-day<br>average", "distance"), ("Max<br>drawdown", "drawdown"),
                 ("Volume<br>(context)", "volume"), ("Relative<br>strength<br>(context)", "strength")]
 
 
 def rank_heatmap(data, ok):
-    """Coins by measures. The colour shows how extreme the rank is: grey is ordinary, amber is 90 up to 95, red is 95 or higher.
+    """Coins by measures. The colour shows how extreme the rank is: dark is ordinary, amber is 90 up to 95, red is 95 or higher.
     Relative strength can be unusual at either end, so its colour uses the distance from the middle and its text is the rank."""
     strength = {x["coin"]: x["rank"] for x in (data.get("cross") or {}).get("relative_strength", [])}
     z, text = [], []
@@ -345,94 +361,332 @@ def rank_heatmap(data, ok):
         values = [s["ranks"]["volatility"], s["ranks"]["distance"], s["ranks"]["drawdown"], ctx.get("volume_rank"), strength.get(c["coin"])]
         text.append(["n/a" if v is None else f"{v:.1f}" for v in values])
         z.append([None if v is None else (max(v, 100.0 - v) if i == 4 else v) for i, v in enumerate(values)])
-    scale = [[0, "#f1f5f9"], [0.89, "#e2e8f0"], [0.9, "#fde68a"], [0.949, "#fcd34d"], [0.95, "#f87171"], [1, "#dc2626"]]
+    scale = [[0, "#161E2D"], [0.89, "#1E2838"], [0.9, "#8A6A1E"], [0.949, "#B7791F"], [0.95, "#C23B33"], [1, "#E5483F"]]
     spec = {"type": "heatmap", "x": [name for name, _ in HEAT_COLUMNS], "y": [c["coin"] for c in ok], "z": z, "text": text,
-            "texttemplate": "%{text}", "textfont": {"size": 15}, "zmin": 50, "zmax": 100, "colorscale": scale, "showscale": False, "xgap": 4, "ygap": 4,
-            "hovertemplate": "%{y}, %{x}: rank %{text}<extra></extra>"}
-    line = {"type": "line", "xref": "x", "yref": "paper", "x0": 2.5, "x1": 2.5, "y0": 0, "y1": 1, "line": {"color": "#0f172a", "width": 1.5, "dash": "dot"}}
-    notes = [{"x": 1, "y": 1.12, "xref": "x", "yref": "paper", "text": "Can raise an alert", "showarrow": False, "font": {"size": 12, "color": "#991b1b"}},
-             {"x": 3.5, "y": 1.12, "xref": "x", "yref": "paper", "text": "Context only", "showarrow": False, "font": {"size": 12, "color": "#475569"}}]
+            "texttemplate": "%{text}", "textfont": {"size": 15, "color": "#FFFFFF"}, "zmin": 50, "zmax": 100, "colorscale": scale,
+            "showscale": False, "xgap": 4, "ygap": 4, "hovertemplate": "%{y}, %{x}: rank %{text}<extra></extra>"}
+    line = {"type": "line", "xref": "x", "yref": "paper", "x0": 2.5, "x1": 2.5, "y0": 0, "y1": 1, "line": {"color": MUTED, "width": 1.5, "dash": "dot"}}
+    notes = [{"x": 1, "y": 1.12, "xref": "x", "yref": "paper", "text": "Can raise an alert", "showarrow": False, "font": {"size": 12, "color": "#FF9C94"}},
+             {"x": 3.5, "y": 1.12, "xref": "x", "yref": "paper", "text": "Context only", "showarrow": False, "font": {"size": 12, "color": MUTED}}]
     return {"data": [spec], "layout": layout(hovermode="closest", yaxis={"autorange": "reversed"}, xaxis={"side": "bottom", "tickfont": {"size": 11}, "tickangle": 0},
                                              shapes=[line], annotations=notes, margin={"l": 50, "r": 10, "t": 40, "b": 70})}
+
+
+def lead_coin(ok):
+    """The coin to feature: the one with the highest rank at the alert rank, else the highest rank of all."""
+    return max(ok, key=lambda c: (max(c["summary"]["ranks"].values()), c["coin"]))
+
+
+def moving_average(closes, window=agent.WINDOW):
+    """The mean of each close and the window - 1 closes before it (None until there are enough), the same average the distance metric uses."""
+    return [None if i < window - 1 else agent.statistics.fmean(closes[i - window + 1:i + 1]) for i in range(len(closes))]
+
+
+def average_chart(c):
+    """The lead coin's close against its own 30-day average, with range buttons. The shaded gap is the distance metric."""
+    closes, stamps = c.get("closes"), c.get("stamps")
+    if not closes or len(closes) < agent.WINDOW + 5:
+        return None
+    avg = moving_average(closes)
+    dates = [agent.format_date(t) for t in stamps]
+    ranges = [r for r in (60, 120, 240) if r <= len(closes) - agent.WINDOW + 1] or [len(closes) - agent.WINDOW + 1]
+    traces = []
+    for r in ranges:
+        lo = len(closes) - r
+        shown = r == ranges[0]
+        traces.append({"type": "scatter", "mode": "lines", "name": "30-day average", "x": dates[lo:], "y": [round(v, 6) for v in avg[lo:]],
+                       "line": {"color": AMBER, "width": 1.6, "dash": "dash"}, "visible": shown, "hovertemplate": "%{y:,.2f}"})
+        traces.append({"type": "scatter", "mode": "lines", "name": f"{c['coin']} close", "x": dates[lo:], "y": [round(v, 6) for v in closes[lo:]],
+                       "line": {"color": TEXT, "width": 2.2}, "fill": "tonexty", "fillcolor": "rgba(229,72,63,.16)", "visible": shown,
+                       "hovertemplate": "%{y:,.2f}"})
+    return {"data": traces, "ranges": range_tabs([f"{r} days" for r in ranges], 2),
+            "layout": layout(yaxis={"title": {"text": f"{c['coin']} close, USD"}, "tickformat": ",.0f" if closes[-1] >= 100 else ",.3f"}, margin={"l": 64, "r": 16, "t": 14, "b": 44})}
+
+
+def price_chart(ok):
+    """Every coin indexed to 100 at the start of the chosen range, with range buttons (30, 60 and 90 days)."""
+    longest = min(len(c.get("closes") or []) for c in ok)
+    ranges = [r for r in (30, 60, 90) if r <= longest] or ([longest] if longest > 1 else [])
+    if not ranges:
+        return None
+    traces = []
+    for r in ranges:
+        for c in ok:
+            window = c["closes"][-r:]
+            traces.append({"type": "scatter", "mode": "lines", "name": c["coin"], "x": [agent.format_date(t) for t in c["stamps"][-r:]],
+                           "y": [round(v / window[0] * 100, 2) for v in window], "line": {"color": COLORS.get(c["coin"], MUTED), "width": 2.5},
+                           "visible": r == ranges[0], "showlegend": r == ranges[0], "legendgroup": c["coin"]})
+    return {"data": traces, "ranges": range_tabs([f"{r} days" for r in ranges], len(ok)),
+            "layout": layout(yaxis={"title": {"text": "Index, start of range = 100"}}, margin={"l": 56, "r": 16, "t": 14, "b": 44})}
+
+
+def history_chart(ok):
+    alert_shape, _ = threshold_lines(agent.ALERT_RANK, "#FF7A70")
+    near_shape, _ = threshold_lines(NEAR_RANK, AMBER, dash="dot")
+    traces = [{"type": "scatter", "mode": "lines", "name": c["coin"], "x": c["rank_dates"], "y": c["rank_top"],
+               "line": {"color": COLORS.get(c["coin"], MUTED), "width": 2.5}} for c in ok]
+    traces += [{"type": "scatter", "mode": "lines", "name": f"Alert rank {agent.ALERT_RANK:g}", "x": [None], "y": [None], "line": {"color": "#FF7A70", "width": 1.5, "dash": "dash"}},
+               {"type": "scatter", "mode": "lines", "name": f"Near threshold {NEAR_RANK:g}", "x": [None], "y": [None], "line": {"color": AMBER, "width": 1.5, "dash": "dot"}}]
+    return {"data": traces, "layout": layout(yaxis={"range": [0, 105], "title": {"text": "Highest of the 3 ranks"}}, shapes=[alert_shape, near_shape])}
+
+
+def persist_chart(events):
+    """Of all days at the alert rank, the share still at it k days later."""
+    values = events["again"]
+    days = [k + 1 for k, v in enumerate(values) if v is not None]
+    shares = [round(v, 1) for v in values if v is not None]
+    if not shares:
+        return None
+    trace = {"type": "scatter", "mode": "lines+markers", "name": "Still at the alert rank", "x": days, "y": shares, "fill": "tozeroy",
+             "fillcolor": "rgba(246,183,60,.14)", "line": {"color": AMBER, "width": 2.5}, "marker": {"size": 6, "color": AMBER},
+             "hovertemplate": "%{y:.0f}% still at the alert rank after %{x} days<extra></extra>"}
+    return {"data": [trace], "layout": layout(hovermode="closest", showlegend=False, xaxis={"title": {"text": "Days after a day at the alert rank"}, "dtick": 3, "range": [0.5, 21.5]},
+                                              yaxis={"range": [0, 100], "title": {"text": "Share still at the alert rank, %"}}, height=300)}
+
+
+def moves_chart(events):
+    """Coin returns 7, 14 and 30 days after an episode starts, against any day. Box = middle half, line = median, whiskers = full range."""
+    horizons = [h for h in insights.HORIZONS if events["after_episode"].get(h) and events["any_day"].get(h)]
+    if not horizons:
+        return None
+    labels = [f"{h} days later" for h in horizons]
+    traces = []
+    for name, key, color in (("After an episode starts", "after_episode", AMBER), ("Any day", "any_day", "#6B7686")):
+        stats = [events[key][h] for h in horizons]
+        traces.append({"type": "box", "name": name, "orientation": "h", "y": labels, "q1": [s["q1"] for s in stats], "median": [s["median"] for s in stats],
+                       "q3": [s["q3"] for s in stats], "lowerfence": [s["low"] for s in stats], "upperfence": [s["high"] for s in stats],
+                       "marker": {"color": color}, "line": {"color": color}, "fillcolor": "rgba(246,183,60,.35)" if key == "after_episode" else "rgba(107,118,134,.35)"})
+    return {"data": traces, "layout": layout(hovermode="closest", boxmode="group", xaxis={"title": {"text": "Return after N days, %"}, "zeroline": True, "zerolinecolor": MUTED},
+                                              yaxis={"autorange": "reversed"}, height=340,
+                                              legend={"orientation": "h", "y": -0.32, "font": {"color": TEXT}}, margin={"l": 112, "r": 16, "t": 14, "b": 84})}
 
 
 def charts(data):
     ok = good(data)
     if not ok:
         return {}
-    price = [{"type": "scatter", "mode": "lines", "name": c["coin"], "x": c["dates"], "y": c["indexed"],
-              "line": {"color": COLORS.get(c["coin"], "#64748b"), "width": 2.5}} for c in ok]
-    ranks = rank_heatmap(data, ok)
-    alert_shape, alert_note = threshold_lines(agent.ALERT_RANK, "#dc2626", f"Alert rank {agent.ALERT_RANK:g}")
-    history = [{"type": "scatter", "mode": "lines", "name": c["coin"], "x": c["rank_dates"], "y": c["rank_top"],
-                "line": {"color": COLORS.get(c["coin"], "#64748b"), "width": 2.5}} for c in ok]
-    return {
-        "price": {"data": price, "layout": layout(yaxis={"title": {"text": "Index, 90 days ago = 100"}})},
-        "ranks": ranks,
-        "history": {"data": history, "layout": layout(
-            yaxis={"range": [0, 105], "title": {"text": "Highest of the 3 ranks"}},
-            shapes=[alert_shape], annotations=[alert_note])},
-    }
+    specs = {"ranks": rank_heatmap(data, ok), "history": history_chart(ok)}
+    if all(c.get("closes") for c in ok):
+        specs["price"] = price_chart(ok)
+        specs["average"] = average_chart(lead_coin(ok))
+    events = data.get("events")
+    if events and events["enough"]:
+        specs["persist"] = persist_chart(events)
+        specs["moves"] = moves_chart(events)
+    return {key: spec for key, spec in specs.items() if spec}
 
 
 # ------------------------------------------------------------------------------------------------
 # 4. The page
 # ------------------------------------------------------------------------------------------------
 CSS = """
-:root{--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--bg:#f1f5f9;--card:#ffffff;--navy:#0b1f3a;--teal:#0f766e;
---red:#dc2626;--amber:#d97706;--green:#16a34a;--violet:#6d28d9}
+:root{--ink:#0A0E16;--bar:#05080D;--panel:#111826;--line:#1F2937;--line2:#2A3446;--amber:#F6B73C;--teal:#5ED0C3;--red:#E5483F;--alert:#B3261E;
+--neg:#FF7A70;--muted:#A3ACBD;--text:#F2F4F8;--soft:#D5DAE4;--violet:#C4B5FD;--green:#7DD9A0}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,"Segoe UI",Roboto,Arial,sans-serif;line-height:1.5}
-.banner{position:relative;overflow:hidden;background:linear-gradient(120deg,#0b1f3a 0%,#0f3d5e 55%,#0f766e 100%);color:#fff;padding:38px 24px 44px}
-.banner svg{position:absolute;right:0;bottom:0;width:60%;height:100%;opacity:.35}
-.wrap{max-width:1120px;margin:0 auto;padding:0 20px;position:relative}
-.banner .wrap{padding:0}
-.eyebrow{letter-spacing:.14em;font-size:12px;font-weight:700;color:#99f6e4}
-h1{margin:10px 0 8px;font-size:30px;line-height:1.2;max-width:760px}
-.meta{font-size:13px;color:#cbd5e1}
-.demo{display:inline-block;margin-top:12px;background:#fde68a;color:#78350f;font-weight:700;padding:5px 12px;border-radius:8px;font-size:13px}
-.pill{display:inline-block;margin-top:16px;padding:7px 16px;border-radius:999px;font-weight:700;font-size:14px}
-.pill.red{background:#fee2e2;color:#991b1b}.pill.green{background:#dcfce7;color:#166534}.pill.grey{background:#e2e8f0;color:#334155}
-main.wrap{margin-top:-24px;padding-bottom:40px}
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin-bottom:18px}
-.kpi,.card{background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:0 1px 2px rgba(15,23,42,.05)}
-.kpi{padding:16px 18px}.kpi .k{font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.06em}
-.kpi .v{font-size:26px;font-weight:800;margin-top:4px}.kpi .s{font-size:12px;color:var(--muted);margin-top:2px}
-.card{padding:20px 22px;margin-bottom:18px}
-.card h2{margin:0 0 4px;font-size:18px}.card .sub{color:var(--muted);font-size:13px;margin:0 0 14px}
-.chip{display:inline-block;font-size:11px;font-weight:700;border-radius:6px;padding:2px 8px;margin-left:8px;vertical-align:middle;letter-spacing:.03em}
-.chip.code{background:#dbeafe;color:#1e40af}.chip.ai{background:#ede9fe;color:#5b21b6}.chip.check{background:#dcfce7;color:#166534}.chip.watch{background:#fef3c7;color:#92400e}
-ul.clean{margin:0;padding-left:20px}ul.clean li{margin:7px 0}
+html{color-scheme:dark}
+body{margin:0;background:var(--ink);color:var(--text);font-family:Inter,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.5}
+a{color:#8FE3D8}a:hover{color:#BDF1EA}a:focus-visible{outline:3px solid #8FE3D8;outline-offset:2px}
+.cond{font-family:"Barlow Condensed","Arial Narrow",sans-serif}
+.mono{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace}
+.wrap{max-width:1360px;margin:0 auto;padding:0 40px}
+.bar{background:var(--bar);border-bottom:1px solid #1B2433}
+.bar .wrap{padding-top:14px;padding-bottom:14px;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px 24px}
+.brand{display:flex;flex-wrap:wrap;align-items:center;gap:12px 14px}
+.logo{font-family:"Barlow Condensed","Arial Narrow",sans-serif;font-weight:700;font-size:28px;letter-spacing:.04em;text-transform:uppercase}
+.live{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#fff;background:var(--alert);border-radius:4px;padding:4px 10px}
+.live.calm{background:#1F6F4A}.live.nodata{background:#4A5568}
+.dot{width:8px;height:8px;border-radius:50%;background:#fff;display:inline-block}
+.byline{font-size:13px;line-height:1.25;color:var(--muted);padding-left:14px;border-left:1px solid var(--line2);animation:byline .9s ease-out .3s both}
+.credit{font-weight:600;background:linear-gradient(100deg,#F2F4F8 0%,#F2F4F8 38%,#F6B73C 50%,#F2F4F8 62%,#F2F4F8 100%);background-size:200% 100%;
+-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent;animation:sheen 6s 1.2s ease-in-out infinite}
+.bar .right{display:flex;flex-wrap:wrap;align-items:center;gap:8px 28px;font-size:14px;color:var(--muted)}
+.bar .right a{display:inline-flex;align-items:center;min-height:44px;font-weight:600;text-decoration:none}
+.ticker{background:#0F1623;border-bottom:1px solid #1B2433;overflow:hidden}
+.ticker .wrap{display:flex;align-items:stretch;gap:20px}
+.ticker .tag{flex:none;display:inline-flex;align-items:center;font-size:12px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--amber);padding:12px 0}
+.ticker .view{flex:1 1 auto;min-width:0;overflow:hidden}
+.track{display:flex;width:max-content;animation:tick 70s linear infinite}
+.track .set{display:flex;flex:none;align-items:center}
+.tick{display:inline-flex;align-items:baseline;gap:10px;padding:12px 28px 12px 0;white-space:nowrap;font-size:14px}
+.tick b{color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-size:12px;font-weight:600}
+.tick span{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-weight:500}
+.neg{color:var(--neg)}.pos{color:var(--green)}.amb{color:var(--amber)}
+main.wrap{padding-top:40px;padding-bottom:56px;display:flex;flex-direction:column;gap:40px}
+.hero{display:flex;flex-wrap:wrap;gap:32px;align-items:stretch}
+.hero .lead{flex:999 1 640px;min-width:0;display:flex;flex-direction:column;gap:22px}
+.hero .meta{display:flex;flex-wrap:wrap;align-items:center;gap:12px;font-size:14px;color:var(--muted)}
+h1{margin:0;font-family:"Barlow Condensed","Arial Narrow",sans-serif;font-weight:700;font-size:clamp(46px,7vw,96px);line-height:.96;text-transform:uppercase;text-wrap:balance}
+.deck{margin:0;font-size:22px;line-height:1.5;color:var(--soft);max-width:780px;text-wrap:pretty}
+.method{margin:0;font-size:14px;line-height:1.55;color:var(--muted);max-width:780px}
+.badge2{display:inline-flex;align-items:center;font-size:14px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#fff;background:var(--alert);border-radius:4px;padding:6px 12px}
+.badge2.calm{background:#1F6F4A}.badge2.nodata{background:#4A5568}
+.badge2 .dot{margin-right:8px}
+.score{flex:1 1 380px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:22px 26px 10px;display:flex;flex-direction:column;gap:4px}
+.cap{font-size:12px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.srow{display:grid;grid-template-columns:96px minmax(0,1fr);gap:14px;padding:16px 0;border-top:1px solid var(--line);align-items:start}
+.srow .code{font-family:"Barlow Condensed","Arial Narrow",sans-serif;font-weight:700;font-size:44px;line-height:1}
+.srow .nm{font-size:12px;color:var(--muted)}
+.srow dl{margin:0;display:grid;grid-template-columns:1fr auto;gap:6px 14px;font-size:14px}
+.srow dt{color:var(--muted);white-space:nowrap}.srow dd{margin:0;text-align:right;white-space:nowrap;font-family:"JetBrains Mono",ui-monospace,Menlo,monospace}
+.score .foot{font-size:12px;color:var(--muted);padding:6px 0 12px;border-top:1px solid var(--line)}
+.sh{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.sh h2{margin:0;font-family:"Barlow Condensed","Arial Narrow",sans-serif;font-weight:700;font-size:30px;text-transform:uppercase;letter-spacing:.02em}
+.sh .rule{flex:1 1 40px;height:1px;background:var(--line2)}
+.block{display:flex;flex-direction:column;gap:16px}
+.top3{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr));gap:16px}
+.hl{display:flex;flex-direction:column;gap:10px;padding:18px 22px 22px;background:var(--panel);border:1px solid var(--line);border-top:3px solid var(--amber);border-radius:6px;animation:fade .6s ease-out both}
+.hl .kick{display:flex;align-items:baseline;gap:12px}
+.hl .n{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:13px;color:var(--amber)}
+.hl .k{font-size:12px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.hl p{margin:0;font-family:"Barlow Condensed","Arial Narrow",sans-serif;font-weight:600;font-size:26px;line-height:1.2;text-wrap:pretty}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr));gap:16px}
+.tile{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:20px 22px;display:flex;flex-direction:column;gap:6px;animation:fade .6s ease-out both}
+.tile .v{font-family:"Barlow Condensed","Arial Narrow",sans-serif;font-weight:700;font-size:48px;line-height:1}
+.tile .s{font-size:13px;color:var(--muted)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:22px 26px;margin:0;overflow-x:auto}
+.card h2{margin:0 0 6px;font-family:"Barlow Condensed","Arial Narrow",sans-serif;font-weight:700;font-size:24px;text-transform:uppercase;letter-spacing:.02em}
+.card .sub,.sub{color:var(--muted);font-size:13px;margin:0 0 14px}
+.card b{color:var(--text)}
+.chip{display:inline-block;font-family:Inter,"Segoe UI",Arial,sans-serif;font-size:11px;font-weight:700;border-radius:4px;padding:2px 8px;margin-left:8px;vertical-align:middle;letter-spacing:.06em;text-transform:uppercase}
+.chip.code{background:rgba(94,208,195,.14);color:var(--teal)}.chip.ai{background:rgba(196,181,253,.16);color:var(--violet)}
+.chip.check{background:rgba(125,217,160,.14);color:var(--green)}.chip.watch{background:rgba(246,183,60,.16);color:var(--amber)}
+ul.clean{margin:0;padding-left:20px}ul.clean li{margin:7px 0;color:var(--soft)}
 table{width:100%;border-collapse:collapse;font-size:14px}
-th{text-align:left;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;padding:8px 10px;border-bottom:2px solid var(--line)}
-td{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{text-align:left;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;padding:8px 10px;border-bottom:2px solid var(--line2)}
+td{padding:10px;border-bottom:1px solid var(--line);vertical-align:top;color:var(--soft)}
+td b{color:var(--text)}
 td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
-.rank{display:inline-block;min-width:44px;text-align:center;border-radius:6px;padding:1px 6px;font-weight:700;font-size:13px}
-.rank.hi{background:#fee2e2;color:#991b1b}.rank.mid{background:#fef3c7;color:#92400e}.rank.lo{background:#f1f5f9;color:#475569}
-.badge{font-weight:700;font-size:12px;border-radius:6px;padding:2px 8px}
-.badge.ALERT{background:#fee2e2;color:#991b1b}.badge.NEAR{background:#fef3c7;color:#92400e}.badge.CALM{background:#dcfce7;color:#166534}.badge.NODATA{background:#e2e8f0;color:#334155}
-.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:18px}
-.chart{min-height:330px;color:var(--muted);font-size:13px}
-.ai{border-left:6px solid var(--violet);background:linear-gradient(90deg,#faf5ff,#ffffff 40%)}
-.ai blockquote{margin:10px 0;padding:12px 16px;background:#f5f3ff;border-radius:10px;font-size:16px}
+.rank{display:inline-block;min-width:44px;text-align:center;border-radius:4px;padding:1px 6px;font-weight:700;font-size:13px;font-family:"JetBrains Mono",ui-monospace,Menlo,monospace}
+.rank.hi{background:rgba(229,72,63,.2);color:#FF9C94}.rank.mid{background:rgba(246,183,60,.16);color:var(--amber)}.rank.lo{background:#1A2231;color:var(--muted)}
+.badge{font-weight:700;font-size:12px;border-radius:4px;padding:2px 8px}
+.badge.ALERT{background:rgba(229,72,63,.2);color:#FF9C94}.badge.NEAR{background:rgba(246,183,60,.16);color:var(--amber)}
+.badge.CALM{background:rgba(125,217,160,.14);color:var(--green)}.badge.NODATA{background:#2A3446;color:var(--muted)}
+.row2{display:flex;flex-wrap:wrap;gap:16px;align-items:stretch}
+.panel{flex:1 1 560px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:22px 24px 20px;display:flex;flex-direction:column;gap:6px}
+.panel h3{margin:0;font-size:12px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--text)}
+.panel .sub{margin:0 0 6px}
+.chart{min-height:300px;color:var(--muted);font-size:13px}
+.tabs{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 2px}
+.tabs button{min-height:32px;padding:4px 14px;border-radius:999px;border:1px solid #3A465C;background:transparent;color:var(--soft);font:600 13px Inter,"Segoe UI",Arial,sans-serif;cursor:pointer}
+.tabs button:hover{border-color:var(--amber)}
+.tabs button[aria-pressed=true]{background:var(--amber);border-color:var(--amber);color:#0A0E16;font-weight:700}
+.tabs button:focus-visible{outline:3px solid #8FE3D8;outline-offset:2px}
+.aicard{border-top:3px solid var(--violet)}
+.aicard blockquote{margin:10px 0;padding:0;font-family:"Barlow Condensed","Arial Narrow",sans-serif;font-weight:600;font-size:30px;line-height:1.2;color:var(--text)}
+.aicard p{color:var(--soft)}
 .facts{display:flex;flex-wrap:wrap;gap:8px 22px;font-size:13px;color:var(--muted);margin:8px 0}
-.q{margin:6px 0 12px;padding:14px 18px;border-left:6px solid var(--teal);background:#f0fdfa;border-radius:10px;font-size:17px;font-weight:600}
+.q{margin:6px 0 12px;padding:14px 18px;border-left:4px solid var(--teal);background:rgba(94,208,195,.08);border-radius:4px;font-size:16px;font-weight:500;color:var(--text)}
 .muted{color:var(--muted);font-size:12px}
 .legend{display:flex;flex-wrap:wrap;gap:10px 20px;font-size:13px;color:var(--muted)}
-footer{font-size:12px;color:var(--muted);padding:6px 4px 30px}
-@media(max-width:640px){h1{font-size:24px}.grid2{grid-template-columns:1fr}}
-@media print{body{background:#fff}.banner{-webkit-print-color-adjust:exact;print-color-adjust:exact}.card,.kpi{box-shadow:none;break-inside:avoid}}
+.st{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(240px,100%),1fr));gap:16px}
+.st .tile .v{font-size:44px}
+.qs{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(320px,100%),1fr));gap:16px}
+.qs .tile{gap:8px}.qs .qn{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:13px;color:var(--amber)}
+.qs h4{margin:0;font-family:"Barlow Condensed","Arial Narrow",sans-serif;font-weight:600;font-size:24px;line-height:1.15}
+.qs p{margin:0;font-size:14px;color:var(--soft)}
+.callout{font-family:"Barlow Condensed","Arial Narrow",sans-serif;font-weight:700;font-size:clamp(30px,4vw,44px);line-height:1.05;text-transform:uppercase;margin:0}
+footer{border-top:1px solid var(--line);padding:26px 0 40px;font-size:12px;color:var(--muted);line-height:1.6}
+footer .wrap{display:flex;flex-direction:column;gap:12px}
+footer .by{font-size:15px;color:var(--soft)}
+footer .by .credit{font-size:18px}
+@keyframes tick{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+@keyframes fade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+@keyframes sheen{0%{background-position:200% 0}100%{background-position:-200% 0}}
+@keyframes byline{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:none}}
+.live .dot,.badge2 .dot{animation:pulse 1.8s ease-in-out infinite}
+@media (prefers-reduced-motion:reduce){.track,.hl,.tile,.byline,.live .dot,.badge2 .dot{animation:none}.credit{animation:none;background:none;-webkit-text-fill-color:var(--text);color:var(--text)}}
+@media (max-width:640px){.wrap{padding:0 18px}.deck{font-size:18px}.srow{grid-template-columns:72px minmax(0,1fr)}.card{padding:18px}table{font-size:13px}}
+@media print{body{background:#fff;color:#111}.track{animation:none}.card,.tile,.hl,.score,.panel{break-inside:avoid}}
 """
 
-BANNER_ART = ('<svg viewBox="0 0 600 220" preserveAspectRatio="none" aria-hidden="true"><g fill="none" stroke="#99f6e4" stroke-width="2">'
-              '<polyline points="0,170 60,150 110,160 170,110 230,125 290,80 350,95 410,50 470,70 540,25 600,40"/>'
-              '<polyline stroke="#fbbf24" stroke-opacity=".7" points="0,190 70,175 130,182 190,150 250,160 310,125 370,135 430,100 490,112 550,80 600,88"/>'
-              '</g><g fill="#99f6e4" fill-opacity=".5"><rect x="90" y="120" width="9" height="46"/><rect x="210" y="96" width="9" height="40"/>'
-              '<rect x="330" y="70" width="9" height="44"/><rect x="450" y="45" width="9" height="42"/></g></svg>')
-
+RAG_URL = "http://127.0.0.1:8765/"      # the local Ask page: python rag_server.py
+FONTS_URL = ("https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600;700"
+             "&family=JetBrains+Mono:wght@500;700&display=swap")
 
 def esc(value):
     return html.escape(str(value), quote=True)
+
+
+def coin_name(coin):
+    return insights.NAMES.get(coin, coin)
+
+
+NUMBER_WORDS = {1: "One", 2: "Two", 3: "Three", 4: "Four", 5: "Five"}
+
+
+def rarity(c, metric):
+    """(days as extreme or more, days ranked) for one metric over the coin's whole history, today included. None without the candles."""
+    closes = c.get("closes")
+    if not closes:
+        return None
+    series, _ = agent.metric_series(closes)
+    values = [abs(v) for v in series[metric] if v is not None]
+    if not values:
+        return None
+    return sum(1 for v in values if v >= values[-1]), len(values)
+
+
+def history_days(data):
+    return max((c["summary"]["history_days"] for c in good(data)), default=0)
+
+
+def hero_title(data):
+    if not good(data):
+        return "Market data unavailable"
+    names = []
+    for _, coin, _, _ in insights.breaches(data["coins"]):
+        if coin not in names:
+            names.append(coin)
+    if not names:
+        return "Calm market: no coin at its alert rank"
+    if len(names) == 1:
+        return f"{coin_name(names[0])} breaches its own history"
+    return f"{NUMBER_WORDS.get(len(names), len(names))} coins breach their own history"
+
+
+def _join_and(items):
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def hero_deck(data):
+    """Two or three sentences, every number from the data."""
+    coins = data["coins"]
+    if not good(data):
+        return "Kraken did not return complete, current candles for any coin, so no statement is made about the market today."
+    hits = insights.breaches(coins)
+    parts = []
+    if hits:
+        rank, coin, metric, s = hits[0]
+        lead = f"{coin_name(coin)} {insights._phrase(metric, s)}"
+        seen = rarity(next(c for c in good(data) if c["coin"] == coin), metric)
+        if seen:
+            lead += f", a reading matched or exceeded on only {seen[0]} of {seen[1]} days in its history, today included"
+        parts.append(lead + ".")
+        per_coin = {}
+        for _, other, m, _ in hits:
+            if (other, m) != (coin, metric) and m not in per_coin.setdefault(other, []):
+                per_coin[other].append(m)
+        by_metrics = {}
+        for other, metrics in per_coin.items():
+            by_metrics.setdefault(tuple(metrics), []).append(other)
+        sentences = [f"{' and '.join(names)} {'is' if len(names) == 1 else 'are'} also at the alert rank on {_join_and([insights.METRIC_TEXT[m] for m in metrics])}"
+                     for metrics, names in by_metrics.items()]
+        if sentences:
+            parts.append("; ".join(sentences[:2]) + ".")
+    else:
+        closest = sorted(((max(c["summary"]["ranks"].values()), c["coin"], c) for c in good(data)), key=lambda t: (-t[0], t[1]))[0]
+        metric = max(closest[2]["summary"]["ranks"], key=closest[2]["summary"]["ranks"].get)
+        parts.append(f"No coin reached the alert rank of {agent.ALERT_RANK:g}. The closest is {closest[1]} at rank {closest[0]:.1f} on {insights.METRIC_TEXT[metric]}.")
+    volume = insights._volume_fact(coins)
+    if volume:
+        lo, hi = min(r for _, r in volume), max(r for _, r in volume)
+        span = f"{lo:.2f} times" if abs(hi - lo) < 0.005 else f"{lo:.2f} to {hi:.2f} times"
+        parts.append(f"Volume runs at {span} its 30-day average.")
+    mood = insights._mood(data.get("context"))
+    if mood:
+        parts.append(f"Fear and Greed reads {mood['value']} ({mood['label']}).")
+    return " ".join(parts)
 
 
 def rank_cell(rank):
@@ -446,6 +700,149 @@ def coin_status(summary):
     if any(NEAR_RANK <= r < agent.ALERT_RANK for r in summary["ranks"].values()):
         return "NEAR"
     return "CALM"
+
+
+def tone_class(tone):
+    return {"red": "", "green": " calm", "grey": " nodata"}[tone]
+
+
+def brand_bar(data, as_of):
+    label, tone, _ = status_of(data)
+    shown = {"ALERT": "Alert", "CALM": "Calm", "NO DATA": "No data"}[label]
+    return (f'<div class="bar"><div class="wrap"><div class="brand"><span class="logo">Crypto Watch</span>'
+            f'<span class="live{tone_class(tone)}"><span class="dot"></span>{shown}</span>'
+            f'<span class="byline">Created by <span class="credit">{esc(CREDIT)}</span></span></div>'
+            f'<div class="right"><span>{esc(data["generated_long"])}</span><span>Data to the {esc(as_of)} UTC close</span>'
+            f'<a href="{RAG_URL}" title="Opens the local Ask page. Start it with: python rag_server.py">Ask the playbook &rarr;</a></div></div></div>')
+
+
+def ticker_items(data):
+    items = []
+    for c in good(data):
+        s = c["summary"]
+        up = s["daily_return_pct"] >= 0
+        arrow = "&#9650;" if up else "&#9660;"
+        items.append((c["coin"], f'{_price(s["last_close"])} {arrow} {abs(s["daily_return_pct"]):.2f}%', "pos" if up else "neg"))
+    fng = insights._mood(data.get("context"))
+    if fng:
+        items.append(("Fear and Greed", f'{fng["value"]} {esc(fng["label"])}', "amb"))
+    btc_iv = (((data.get("context") or {}).get("coins") or {}).get("BTC") or {}).get("implied_volatility")
+    if sources.is_data(btc_iv):
+        items.append(("BTC implied vol", f'{btc_iv["implied_vol_pct"]:.2f}%', ""))
+    for c in good(data):
+        ctx = c["summary"].get("context") or {}
+        if ctx.get("volume_ratio_30d") is not None:
+            items.append((f'{c["coin"]} volume', f'{ctx["volume_ratio_30d"]:.2f}&times; 30-day avg', ""))
+    return items
+
+
+def ticker(data):
+    items = ticker_items(data)
+    if not items:
+        return ""
+    one = "".join(f'<span class="tick"><b>{esc(label)}</b><span class="{cls}">{value}</span></span>' for label, value, cls in items)
+    return (f'<div class="ticker"><div class="wrap"><span class="tag">Markets</span><div class="view"><div class="track">'
+            f'<div class="set">{one}</div><div class="set" aria-hidden="true">{one}</div></div></div></div></div>')
+
+
+SCORE_LABELS = {"volatility": "Volatility", "distance": "Vs 30-day avg", "drawdown": "Drawdown"}
+
+
+def scoreboard(data):
+    rows = []
+    for c in data["coins"]:
+        if "error" in c:
+            rows.append(f'<div class="srow"><div><div class="code">{esc(c["coin"])}</div></div><div class="muted">Data unavailable: {esc(c["error"])}. No statement is made for this coin.</div></div>')
+            continue
+        s = c["summary"]
+        status = coin_status(s)
+        lines = "".join(f'<dt>{esc(SCORE_LABELS[m])}</dt><dd>{esc(insights.metric_value(s, m))} {rank_cell(s["ranks"][m])}</dd>' for m in agent.METRICS)
+        rows.append(f'<div class="srow"><div><div class="code">{esc(c["coin"])}</div><div class="nm">{esc(coin_name(c["coin"]))}</div>'
+                    f'<div style="margin-top:6px"><span class="badge {status}">{status}</span></div></div><dl>{lines}</dl></div>')
+    return ('<div class="score"><span class="cap">Breach scoreboard</span>' + "".join(rows) +
+            f'<span class="foot">Alert at rank {agent.ALERT_RANK:g} or higher. Near threshold from {NEAR_RANK:g} up to {agent.ALERT_RANK:g}.</span></div>')
+
+
+def hero(data, as_of):
+    label, tone, _ = status_of(data)
+    shown = {"ALERT": "Alert", "CALM": "Calm market", "NO DATA": "No data"}[label]
+    demo = '<span class="badge2" style="background:#B7791F">Demo data: synthetic prices</span>' if data.get("demo") else ""
+    return (f'<div class="hero"><div class="lead"><div class="meta"><span class="badge2{tone_class(tone)}"><span class="dot"></span>{shown}</span>{demo}'
+            f'<span>Data as of {esc(as_of)} (latest completed UTC day) &middot; generated {esc(data["generated"])} UTC</span></div>'
+            f'<h1>{esc(hero_title(data))}</h1><p class="deck">{esc(hero_deck(data))}</p>'
+            f'<p class="method">Each coin is ranked against its own past {history_days(data)} days. This is a description of how unusual today is, not a forecast of what comes next.</p></div>'
+            f'{scoreboard(data)}</div>')
+
+
+def section(title, body, chip=""):
+    return f'<section class="block"><div class="sh"><h2>{esc(title)}</h2>{chip}<span class="rule"></span></div>{body}</section>'
+
+
+def top3_section(data):
+    cards = "".join(f'<div class="hl" style="animation-delay:{i * 120}ms"><div class="kick"><span class="n">0{i + 1}</span><span class="k">{esc(item["kicker"])}</span></div>'
+                    f'<p>{esc(item["text"])}</p></div>' for i, item in enumerate(insights.top_headlines(data["coins"], data.get("context"))))
+    return section("Top 3 headlines", f'<div class="top3">{cards}</div>', '<span class="chip code">Computed by code</span>')
+
+
+def stat_tiles(data):
+    ok = good(data)
+    if not ok:
+        return ""
+    events = data.get("events")
+    tiles = [("Coins at the alert rank", f"{len(breaching(data))} of {len(data['coins'])}", f"Alert rank {agent.ALERT_RANK:g}, near threshold {NEAR_RANK:g}", "")]
+    widest = max(ok, key=lambda c: abs(c["summary"]["dist_from_30d_avg_pct"]))
+    gap = widest["summary"]["dist_from_30d_avg_pct"]
+    tiles.append(("Widest gap to average", f"{gap:+.2f}%", f"{widest['coin']} against its own 30-day average", "neg" if gap < 0 else "pos"))
+    mood = insights._mood(data.get("context"))
+    if mood:
+        tiles.append(("Fear and Greed", f"{mood['value']}", f"{mood['label']}, 30-day mean {mood['mean_prior_30d']:.0f}", "amb"))
+    else:
+        top = max(ok, key=lambda c: (c["summary"].get("context") or {}).get("volume_ratio_30d") or 0)
+        ratio = (top["summary"].get("context") or {}).get("volume_ratio_30d")
+        if ratio:
+            tiles.append(("Volume vs 30-day average", f"{ratio:.2f}x", f"{top['coin']}, the highest of the coins", ""))
+    runs = {coin: run for coin, run in ((events or {}).get("current_run") or {}).items() if run}
+    if runs:
+        coin, run = max(runs.items(), key=lambda kv: (kv[1], kv[0]))
+        typical = f"the typical episode lasts {events['run_median']:g} days" if events.get("run_median") else "past episodes are in the table below"
+        tiles.append(("Longest current run", f"Day {run}", f"{coin} at the alert rank; {typical}", "amb"))
+    else:
+        tiles.append(("Data reliability", f"{len(ok)} of {len(data['coins'])}", "coins with complete, current Kraken candles", ""))
+    body = "".join(f'<div class="tile" style="animation-delay:{i * 100}ms"><span class="cap">{esc(k)}</span><span class="v {cls}">{esc(v)}</span><span class="s">{esc(sub)}</span></div>'
+                   for i, (k, v, sub, cls) in enumerate(tiles))
+    return f'<div class="tiles">{body}</div>'
+
+
+def chart_panel(key, title, sub, specs):
+    if key not in specs:
+        return ""
+    return f'<div class="panel"><h3>{esc(title)}</h3><p class="sub">{esc(sub)}</p><div class="chart" data-chart="{key}"></div></div>'
+
+
+def charts_section(data):
+    ok = good(data)
+    if not ok:
+        return ""
+    specs = charts(data)
+    lead = lead_coin(ok)["coin"]
+    first = (chart_panel("average", f"{lead} against its own 30-day average", "The shaded gap is the distance metric. Buttons: 60, 120 or 240 days. Hover for values.", specs)
+             + chart_panel("price", "Price, indexed to 100", "Every coin starts at 100 at the start of the range you pick (30, 60 or 90 days). Click a name in the legend to hide it.", specs))
+    second = (chart_panel("ranks", "Today against each coin's own history", "Rank 0 to 100: 95 means higher than about 95% of the coin's own days.", specs)
+              + chart_panel("history", "How unusual each coin has been", "Highest of the three ranks, last 60 days. Above the red line is the alert rank.", specs))
+    rows = "".join(f'<div class="row2">{row}</div>' for row in (first, second) if row.strip())
+    return section("The charts", rows, '<span class="chip code">Computed by code</span><span class="chip watch">Interactive: hover, zoom, drag</span>')
+
+
+def question_section():
+    coins = " &middot; ".join(esc(c) for c in agent.WATCHLIST)
+    return (
+        '<section class="card"><h2>The question this agent answers</h2>'
+        f'<blockquote class="q">{esc(MONITORING_QUESTION)}</blockquote>'
+        '<p class="sub"><b>What the agent answers each day today:</b> ' + esc(agent.QUESTION) + ' '
+        'Trend, volume, relative strength and the correlation between coins are context: the agent describes them and they never raise an alert on their own. '
+        'Forward scenarios are shown below as conditions to monitor, not predictions. The agent makes no forecast, by design.</p>'
+        f'<div class="facts"><span>Watchlist: {coins} (USD pairs)</span><span>Data: Kraken daily candles, latest completed UTC day</span>'
+        f'<span>Cadence: once a day, 05:17 UTC</span><span>Output: one Sheet row, and this brief by email every day</span></div></section>')
 
 
 def snapshot_table(data):
@@ -467,18 +864,6 @@ def snapshot_table(data):
     head = ('<tr><th>Coin</th><th class="num">Last close</th><th class="num">Day</th><th class="num">Volatility (rank)</th>'
             '<th class="num">Vs 30-day average (rank)</th><th class="num">Max drawdown (rank)</th><th>Status</th></tr>')
     return f"<table>{head}{''.join(rows)}</table>"
-
-
-def question_section():
-    coins = " &middot; ".join(esc(c) for c in agent.WATCHLIST)
-    return (
-        '<section class="card"><h2>The question this agent answers</h2>'
-        f'<blockquote class="q">{esc(MONITORING_QUESTION)}</blockquote>'
-        '<p class="sub"><b>What the agent answers each day today:</b> ' + esc(agent.QUESTION) + ' '
-        'Trend, volume, relative strength and the correlation between coins are context: the agent describes them and they never raise an alert on their own. '
-        'Forward scenarios are shown below as conditions to monitor, not predictions. The agent makes no forecast, by design.</p>'
-        f'<div class="facts"><span>Watchlist: {coins} (USD pairs)</span><span>Data: Kraken daily candles, latest completed UTC day</span>'
-        f'<span>Cadence: once a day, 05:17 UTC</span><span>Output: one Sheet row, and an email when there is an alert</span></div></section>')
 
 
 def scenario_rows():
@@ -511,7 +896,7 @@ def ai_section(data):
     chips = '<span class="chip ai">WRITTEN BY AI</span>'
     if decision is None:
         note = data.get("decisions_note") or "No decision has been saved to the Sheet yet."
-        return (f'<section class="card ai"><h2>AI analysis{chips}</h2><p class="sub">{esc(note)}</p></section>')
+        return (f'<section class="card aicard"><h2>AI analysis{chips}</h2><p class="sub">{esc(note)}</p></section>')
     blocked = str(decision.get("blocked_reason") or "")
     verdict = (f'<span class="chip check">PASSED THE CODE GUARDRAILS</span>' if not blocked
                else f'<span class="chip watch">BLOCKED BY A GUARDRAIL</span>')
@@ -524,7 +909,7 @@ def ai_section(data):
         mark = "Consistent" if cross[0] else "Different"
         cross_html = f'<p><b>Cross-check by code: {mark}.</b> {esc(cross[1])}</p>'
     return (
-        f'<section class="card ai"><h2>AI analysis{chips}{verdict}</h2>'
+        f'<section class="card aicard"><h2>AI analysis{chips}{verdict}</h2>'
         f'<p class="sub">The agent is an AI model that recommends; the code decides what is allowed through. This is its latest saved decision.</p>'
         f'<blockquote>{esc(message)}</blockquote>'
         f'<p><b>Reasoning given by the AI:</b> {esc(reasoning)}</p>'
@@ -735,106 +1120,262 @@ def watch_section(data):
             'A level is no longer valid once the next candle completes, or if Kraken returns incomplete or stale data.</p></section>')
 
 
+MINUS = "\u2212"
+
+
+def _sign(v, digits=1):
+    text = f"{v:+.{digits}f}"
+    if float(text) == 0:
+        text = f"{0:.{digits}f}"
+    return text.replace("-", MINUS) + "%"
+
+
+def _band(v):
+    """A move for a range: whole percent when large, one decimal when small, so a small negative never reads as -0%."""
+    return _sign(v, 0 if abs(v) >= 10 else 1)
+
+
+def outlook_headline(events):
+    """The headline is chosen from the numbers, so it cannot claim something the history does not show."""
+    again = events["again"]
+    next_day, week = again[0], again[6] if len(again) > 6 else None
+    if next_day is None:
+        sticky = "Stress is hard to read."
+    elif next_day >= 70 and (week or 0) >= 40:
+        sticky = "Stress is sticky."
+    elif next_day < 50:
+        sticky = "Stress fades fast."
+    else:
+        sticky = "Stress lasts a while."
+    after, any_day = events["after_episode"].get(7), events["any_day"].get(7)
+    if after and any_day and abs(after["up_pct"] - any_day["up_pct"]) < 15:
+        direction = "Direction is not."
+    elif after and any_day:
+        direction = "Direction differs from other days, on a small sample."
+    else:
+        direction = ""
+    return f"{sticky} {direction}".strip()
+
+
+def outlook_tiles(events):
+    again, tiles = events["again"], []
+    if again and again[0] is not None:
+        week = f"Falls to {again[6]:.0f}% seven days later" if len(again) > 6 and again[6] is not None else ""
+        tiles.append(("Still at the alert rank", f"{again[0]:.0f}%", "of alert days are followed by another one the next day", week))
+    if events["run_median"] is not None:
+        runs = ", ".join(f"{coin} day {run}" for coin, run in sorted(events["current_run"].items()) if run)
+        tiles.append(("Typical episode length", f"{events['run_median']:g} days", f"Mean {events['run_mean']:.1f} days, longest {events['run_max']}",
+                      f"Today: {runs}" if runs else "Today: no coin at the alert rank"))
+    after7, any7 = events["after_episode"].get(7), events["any_day"].get(7)
+    if after7 and any7:
+        similar = "a similar share, so no visible edge" if abs(after7["up_pct"] - any7["up_pct"]) < 15 else "a different share, on a small sample"
+        tiles.append(("Up after 7 days", f"{after7['up_pct']:.0f}%", f"of coins, 7 days after an episode starts (n={after7['n']})", f"On any day it is {any7['up_pct']:.0f}%, {similar}"))
+    after30 = events["after_episode"].get(30)
+    if after30:
+        tiles.append(("Median 30-day move", _sign(after30["median"]), f"after an episode starts, middle half {_band(after30['q1'])} to {_band(after30['q3'])}",
+                      f"Full range {_band(after30['low'])} to {_band(after30['high'])} (n={after30['n']})"))
+    return tiles
+
+
+def reader_questions(data, events):
+    """Five questions for the reader, each answered with numbers from today's data. None of them is an instruction."""
+    out = []
+    runs = {coin: run for coin, run in events["current_run"].items() if run}
+    typical = events["run_median"]
+    if runs and typical is not None:
+        text = ", ".join(f"{coin_name(coin)} is on day {run}" for coin, run in sorted(runs.items())) + f", against a typical episode of {typical:g} days."
+        out.append(("Is this a regime or a single-day shock?", text + f" A rank that drops below {NEAR_RANK:g} inside a week would look like how most past episodes ended."))
+    else:
+        out.append(("Is this a regime or a single-day shock?", "No coin is at the alert rank today, so there is no run to measure."))
+    flagged = list((data.get("context") or {}).get("flags") or [])
+    flagged += [f"{c['coin']} volume" for c in good(data) if "volume" in c["summary"].get("flags", [])]
+    flagged += [f"{c['coin']} price ranks" for c in breaching(data)]
+    out.append(("Do the independent signals agree?",
+                "Price ranks, volume, funding, implied volatility and sentiment come from different feeds. "
+                + (f"Flagged as unusual today: {'; '.join(flagged)}. " if flagged else "None of them is flagged as unusual today. ")
+                + "When only one feed is unusual, it is weaker evidence."))
+    after = events["after_episode"].get(30)
+    if after:
+        out.append(("How wide is the range of past outcomes?",
+                    f"Thirty days after an episode started, coins ended between {_band(after['low'])} and {_band(after['high'])}, with the middle half from "
+                    f"{_band(after['q1'])} to {_band(after['q3'])}. The width matters more than the median."))
+    else:
+        out.append(("How wide is the range of past outcomes?", "Too few past episodes for a range of outcomes."))
+    liq = [(coin, piece.get("liquidity")) for coin, piece in ((data.get("context") or {}).get("coins") or {}).items()]
+    liq = [(coin, x) for coin, x in liq if sources.is_data(x)]
+    if liq:
+        coin, x = liq[0]
+        out.append(("Is the market deep enough to absorb size?",
+                    f"On Kraken, {coin} shows a spread of {x['spread_pct']:.4f}% with {_usd(x['bid_depth_usd'])} of bids and {_usd(x['ask_depth_usd'])} of asks within "
+                    f"{x['depth_band_pct']:g}% of the price. Thin books make the same move cost more."))
+    else:
+        out.append(("Is the market deep enough to absorb size?", "The order-book feed did not respond today, so depth is not stated."))
+    out.append(("What would change the picture?",
+                f"Every rank back under {NEAR_RANK:g} reads as calm. A coin that was not at the alert rank and closes beyond its trigger level is a new breach (see the watch scenarios below)."))
+    return out
+
+
+def outlook_section(data):
+    events = data.get("events")
+    if not events:
+        return ""
+    chip = '<span class="chip code">Computed by code</span><span class="chip watch">Past data, not a forecast</span>'
+    ok = good(data)
+    ranked = max((len((c.get("base_rate") or {}).get("flags") or []) for c in ok), default=0)
+    if not events["enough"]:
+        note = (f'<div class="card"><p class="sub" style="margin:0">Only {events["episodes"]} past alert episodes exist in this history, fewer than the {insights.MIN_EPISODES} needed before '
+                'outcome statistics are shown. Persistence and typical length are not shown either, because they would rest on too few events. Nothing here is a forecast.</p></div>')
+        return section("What the history says", note, chip)
+    tiles = "".join(f'<div class="tile" style="animation-delay:{i * 100}ms"><span class="cap">{esc(k)}</span><span class="v amb">{esc(v)}</span><span class="s">{esc(s1)}</span>'
+                    f'<span class="s">{esc(s2)}</span></div>' for i, (k, v, s1, s2) in enumerate(outlook_tiles(events)))
+    after = events["after_episode"].get(30) or events["after_episode"].get(7)
+    summary = (f'Across {events["episodes"]} alert episodes in the last {history_days(data)} days, the alert rank tends to {"last" if events["again"][0] and events["again"][0] >= 50 else "end quickly"}, '
+               'but the price moves that follow are spread widely. The rank describes the regime. It does not call the next move.')
+    charts_row = (
+        '<div class="row2">'
+        '<div class="panel"><h3>How many days the alert rank lasts</h3><p class="sub">Of all days at the alert rank, the share that is at it again k days later. Pooled over the coins.</p>'
+        '<div class="chart" data-chart="persist"></div>'
+        f'<p class="sub" style="margin:0">Computed on {ranked} ranked days per coin. Hover for values.</p></div>'
+        '<div class="panel"><h3>Where prices went afterwards</h3><p class="sub">Coin returns 7, 14 and 30 days after an episode starts, against any day. Box: middle half. Line: median. Whiskers: full range.</p>'
+        '<div class="chart" data-chart="moves"></div>'
+        f'<p class="sub" style="margin:0">The boxes overlap almost everywhere. With {(events["after_episode"].get(7) or {}).get("n", 0)} episode starts, and coins that move together, this is a hint about spread, not a model of direction.</p></div>'
+        '</div>')
+    questions = "".join(f'<div class="tile"><span class="qn">0{i + 1}</span><h4>{esc(q)}</h4><p>{esc(a)}</p></div>' for i, (q, a) in enumerate(reader_questions(data, events)))
+    trust = [
+        f"Small sample: {events['episodes']} episodes, and the coins tend to breach together, so there are fewer independent events than it looks.",
+        f"{history_days(data)} days of daily data cover one stretch of the market. A different regime can behave differently.",
+        "Ranks are relative to each coin's own past, not to the wider market or to fundamentals.",
+        "No fees, spreads or slippage are included in any return shown.",
+    ]
+    body = (f'<p class="callout">{esc(outlook_headline(events))}</p><p class="deck" style="font-size:18px">{esc(summary)}</p>'
+            f'<div class="st">{tiles}</div>{charts_row}'
+            f'<div class="sh" style="margin-top:8px"><h2 style="font-size:24px">Five questions this data raises</h2><span class="rule"></span></div><div class="qs">{questions}</div>'
+            '<p class="sub" style="margin:0">These are questions for the reader, not instructions. The report does not tell anyone to act.</p>'
+            '<div class="card"><h2>How far to trust this</h2><ul class="clean">' + "".join(f"<li>{esc(t)}</li>" for t in trust) + "</ul></div>")
+    return section("What the history says", body, chip)
+
+
 def chart_script(specs):
     payload = json.dumps(specs).replace("</", "<\\/")
-    return ('<script src="%s"></script><script>(function(){var specs=%s;var cfg={displayModeBar:false,responsive:true};'
+    return ('<script src="%s"></script><script>(function(){var specs=%s;'
+            'var cfg={displayModeBar:"hover",displaylogo:false,responsive:true,modeBarButtonsToRemove:["select2d","lasso2d"]};'
             'document.querySelectorAll(".chart").forEach(function(el){var spec=specs[el.dataset.chart];'
             'if(!spec){return;}if(!window.Plotly){el.textContent="The charts need an internet connection to load plotly.js.";return;}'
-            'el.textContent="";Plotly.newPlot(el,spec.data,spec.layout,cfg);});})();</script>') % (PLOTLY_URL, payload)
+            'el.textContent="";Plotly.newPlot(el,spec.data,spec.layout,cfg);'
+            'if(spec.ranges&&spec.ranges.length>1){var bar=document.createElement("div");bar.className="tabs";bar.setAttribute("role","group");'
+            'bar.setAttribute("aria-label","Range");spec.ranges.forEach(function(r,i){var b=document.createElement("button");b.type="button";'
+            'b.textContent=r.label;b.setAttribute("aria-pressed",i===0?"true":"false");b.addEventListener("click",function(){'
+            'Plotly.update(el,{visible:r.visible},{"xaxis.autorange":true,"yaxis.autorange":true});'
+            'bar.querySelectorAll("button").forEach(function(o){o.setAttribute("aria-pressed",o===b?"true":"false");});});bar.appendChild(b);});'
+            'el.parentNode.insertBefore(bar,el);}});})();</script>') % (PLOTLY_URL, payload)
+
+
+def footer_html():
+    return ('<footer><div class="wrap"><div class="by">Created by <span class="credit">' + esc(CREDIT) + '</span></div>'
+            '<div><b>Live market-data analysis and decision support. Not investment advice.</b> This report contains no price forecast and makes no recommendation. '
+            f'Thresholds are descriptive conventions (rank {agent.ALERT_RANK:g}, 30-day window, daily candles), documented with reasons in playbook.md. '
+            'Price data: Kraken public OHLC API. Market context, where available: Kraken order book and Kraken Futures, Deribit volatility index (DVOL), '
+            'market-wide volume and prices from <a href="https://www.coingecko.com/en/api">CoinGecko API</a>, and the Fear and Greed Index from '
+            '<a href="https://alternative.me/crypto/fear-and-greed-index/">alternative.me</a>. '
+            'Generated by the Crypto Watch Agent from its own tools; see the repository README for the method and guardrails.</div></div></footer>')
 
 
 def build_html(data):
-    label, tone, summary_line = status_of(data)
     ok = good(data)
-    breached = len(breaching(data))
     as_of = max((c["summary"]["as_of"] for c in ok), default="unavailable")
-    demo = '<div class="demo">DEMO DATA: synthetic prices, not real market data</div>' if data.get("demo") else ""
-    kpis = [
-        ("Status", label, summary_line),
-        ("Coins at the alert rank", f"{breached} of {len(data['coins'])}", f"Alert rank {agent.ALERT_RANK:g}, near threshold {NEAR_RANK:g}"),
-        ("Data reliability", f"{len(ok)} of {len(data['coins'])} coins", "Complete, current daily candles from Kraken"),
-        ("Window", "30 days", f"Ranked against up to ~700 days of each coin's own history"),
-    ]
-    kpi_html = "".join(f'<div class="kpi"><div class="k">{esc(k)}</div><div class="v">{esc(v)}</div><div class="s">{esc(s)}</div></div>' for k, v, s in kpis)
+    data = {**data, "generated_long": data.get("generated_long") or data["generated"][:10]}
     head = "".join(f"<li>{esc(line)}</li>" for line in headlines(data))
     watch = "".join(f"<li>{esc(line)}</li>" for line in triggers(data))
-    charts_html = ""
-    if ok:
-        charts_html = (
-            '<section class="card"><h2>Charts<span class="chip code">COMPUTED BY CODE</span></h2>'
-            '<p class="sub">Ranks compare today with the coin\'s own past, so a rank of 95 means higher than about 95% of its own days.</p>'
-            '<div class="grid2"><div><b>Price, indexed to 100 (last 90 days)</b><div class="chart" data-chart="price"></div></div>'
-            '<div><b>Today against each coin\'s own history (rank, 0 to 100)</b><div class="chart" data-chart="ranks"></div></div></div>'
-            '<div style="margin-top:12px"><b>How unusual each coin has been: highest of the three ranks, last 60 days</b>'
-            '<div class="chart" data-chart="history"></div></div></section>')
-    generated = data["generated"]
+    snapshot = (f'<section class="card"><h2>Market snapshot<span class="chip code">Computed by code</span></h2>'
+                f'<p class="sub">Each value is followed by its rank (0 to 100) against that coin\'s own history. Red is at or above {agent.ALERT_RANK:g}, amber is {NEAR_RANK:g} to below {agent.ALERT_RANK:g}.</p>'
+                f'{snapshot_table(data)}</section>')
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Crypto Watch: Executive Intelligence Brief</title><style>{CSS}</style></head><body>
-<header class="banner">{BANNER_ART}<div class="wrap">
-<div class="eyebrow">CRYPTO WATCH AGENT &middot; EXECUTIVE INTELLIGENCE BRIEF</div>
-<h1>BTC, ETH and XRP: how unusual is today against their own history?</h1>
-<div class="meta">Data as of {esc(as_of)} (latest completed UTC day) &middot; Generated {esc(generated)} UTC &middot; Source: Kraken daily candles</div>
-<span class="pill {tone}">{esc(label)}: {esc(summary_line)}</span>{demo}</div></header>
+<title>Crypto Watch: Executive Intelligence Brief</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="{FONTS_URL}" rel="stylesheet">
+<style>{CSS}</style></head><body>
+{brand_bar(data, as_of)}
+{ticker(data)}
 <main class="wrap">
-<div class="kpis">{kpi_html}</div>
+{hero(data, as_of)}
+{top3_section(data)}
+{stat_tiles(data)}
+{charts_section(data)}
+{ai_section(data)}
+{outlook_section(data)}
 {question_section()}
-<section class="card"><h2>Headlines<span class="chip code">COMPUTED BY CODE</span></h2><ul class="clean">{head}</ul></section>
-<section class="card"><h2>Market snapshot<span class="chip code">COMPUTED BY CODE</span></h2>
-<p class="sub">Each value is followed by its rank (0 to 100) against that coin's own history. Red is at or above {agent.ALERT_RANK:g}, amber is {NEAR_RANK:g} to below {agent.ALERT_RANK:g}.</p>{snapshot_table(data)}</section>
-{charts_html}
+<section class="card"><h2>Everything the code found today<span class="chip code">Computed by code</span></h2><ul class="clean">{head}</ul></section>
+{snapshot}
 {context_section(data)}
 {market_context_section(data)}
 {base_rate_section(data)}
-{ai_section(data)}
-<section class="card"><h2>What to watch at the next review<span class="chip watch">MONITORING TRIGGERS, NOT FORECASTS</span></h2><ul class="clean">{watch}</ul></section>
+<section class="card"><h2>What to watch at the next review<span class="chip watch">Monitoring triggers, not forecasts</span></h2><ul class="clean">{watch}</ul></section>
 {watch_section(data)}
-<section class="card"><h2>Decision history<span class="chip code">FROM THE SHEET</span></h2>{decision_table(data)}</section>
+<section class="card"><h2>Decision history<span class="chip code">From the Sheet</span></h2>{decision_table(data)}</section>
 {scenario_section()}
 <section class="card"><h2>How to read this report</h2><div class="legend">
-<span><span class="chip code">COMPUTED BY CODE</span> numbers, ranks, headlines, triggers</span>
-<span><span class="chip ai">WRITTEN BY AI</span> the analysis text</span>
-<span><span class="chip check">CHECKED BY CODE</span> guardrails on the AI's decision</span></div></section>
-<footer><b>Education only. Not financial advice.</b> This report contains no price forecast and makes no recommendation. Thresholds are descriptive conventions
-(rank {agent.ALERT_RANK:g}, 30-day window, daily candles), documented with reasons in playbook.md. Price data: Kraken public OHLC API.
-Market context, where available: Kraken order book and Kraken Futures, Deribit volatility index (DVOL), market-wide volume and prices from
-<a href="https://www.coingecko.com/en/api">CoinGecko API</a>, and the Fear and Greed Index from <a href="https://alternative.me/crypto/fear-and-greed-index/">alternative.me</a>.
-Generated by the Crypto Watch Agent from its own tools; see the repository README for the method and guardrails.</footer>
-</main>{chart_script(charts(data))}</body></html>"""
+<span><span class="chip code">Computed by code</span> numbers, ranks, headlines, triggers, event study</span>
+<span><span class="chip ai">Written by AI</span> the analysis text</span>
+<span><span class="chip check">Checked by code</span> guardrails on the AI's decision</span></div></section>
+</main>
+{footer_html()}
+{chart_script(charts(data))}</body></html>"""
 
 
 # ------------------------------------------------------------------------------------------------
 # 5. Email (inline styles only: email programs ignore scripts and most CSS)
 # ------------------------------------------------------------------------------------------------
 def build_email(data):
-    label, tone, summary_line = status_of(data)
-    colors = {"red": ("#fee2e2", "#991b1b"), "green": ("#dcfce7", "#166534"), "grey": ("#e2e8f0", "#334155")}[tone]
-    items = "".join(f'<li style="margin:6px 0">{esc(line)}</li>' for line in headlines(data))
+    label, tone, _ = status_of(data)
+    pill = {"red": ("#B3261E", "#FFFFFF"), "green": ("#1F6F4A", "#FFFFFF"), "grey": ("#4A5568", "#FFFFFF")}[tone]
+    shown = {"ALERT": "ALERT", "CALM": "CALM MARKET", "NO DATA": "NO DATA"}[label]
+    as_of = max((c["summary"]["as_of"] for c in good(data)), default="unavailable")
+    deck = hero_deck(data)
+    top = "".join(
+        f'<tr><td style="padding:10px 0;border-top:1px solid #E3E7EE;vertical-align:top;width:34px;font-family:Consolas,Menlo,monospace;font-size:13px;color:#B7791F">0{i + 1}</td>'
+        f'<td style="padding:10px 0;border-top:1px solid #E3E7EE"><div style="font-size:11px;font-weight:700;letter-spacing:.1em;color:#5B6678;text-transform:uppercase">{esc(item["kicker"])}</div>'
+        f'<div style="font-size:17px;line-height:1.35;font-weight:600;color:#0A0E16;margin-top:2px">{esc(item["text"])}</div></td></tr>'
+        for i, item in enumerate(insights.top_headlines(data["coins"], data.get("context"))))
+    cells = []
+    ok = good(data)
+    if ok:
+        cells.append(("At the alert rank", f"{len(breaching(data))} of {len(data['coins'])}"))
+        widest = max(ok, key=lambda c: abs(c["summary"]["dist_from_30d_avg_pct"]))
+        cells.append((f"{widest['coin']} vs 30-day avg", f"{widest['summary']['dist_from_30d_avg_pct']:+.2f}%".replace("-", MINUS)))
+        mood = insights._mood(data.get("context"))
+        if mood:
+            cells.append(("Fear and Greed", f"{mood['value']}"))
+    strip = "".join(f'<td style="padding:12px 8px;text-align:center;background:#F3F5F9;border-radius:6px"><div style="font-size:11px;letter-spacing:.08em;color:#5B6678;text-transform:uppercase">{esc(k)}</div>'
+                    f'<div style="font-size:24px;font-weight:700;color:#0A0E16;margin-top:2px">{esc(v)}</div></td><td style="width:8px"></td>' for k, v in cells)
     decision = latest_decision(data)
     ai = ""
     if decision and decision.get("message"):
-        ai = (f'<tr><td style="padding:0 24px 18px"><div style="border-left:5px solid #6d28d9;background:#f5f3ff;padding:12px 16px;border-radius:8px">'
-              f'<div style="font-size:11px;font-weight:700;color:#5b21b6;letter-spacing:.05em">AI ANALYSIS (WRITTEN BY AI, CHECKED BY CODE)</div>'
-              f'<div style="margin-top:6px;font-size:15px;color:#0f172a">{esc(decision["message"])}</div></div></td></tr>')
-    demo = '<div style="color:#92400e;font-weight:700">DEMO DATA</div>' if data.get("demo") else ""
+        ai = (f'<tr><td style="padding:6px 28px 18px"><div style="border-left:4px solid #7C5CD6;background:#F5F2FF;padding:12px 16px;border-radius:6px">'
+              f'<div style="font-size:11px;font-weight:700;color:#5B3FB0;letter-spacing:.08em">AI ANALYSIS (WRITTEN BY AI, CHECKED BY CODE)</div>'
+              f'<div style="margin-top:6px;font-size:15px;line-height:1.45;color:#0A0E16">{esc(decision["message"])}</div></div></td></tr>')
+    demo = '<div style="color:#F6B73C;font-weight:700;margin-top:8px">DEMO DATA: synthetic prices</div>' if data.get("demo") else ""
     return (
-        '<div style="background:#f1f5f9;padding:18px;font-family:Segoe UI,Arial,sans-serif;color:#0f172a">'
-        '<table role="presentation" width="640" align="center" style="max-width:640px;width:100%;background:#ffffff;border-radius:12px;border-collapse:collapse;overflow:hidden">'
-        '<tr><td style="background:#0b3b52;background-image:linear-gradient(120deg,#0b1f3a,#0f766e);padding:26px 24px;color:#ffffff">'
-        '<div style="font-size:11px;letter-spacing:.14em;font-weight:700;color:#99f6e4">CRYPTO WATCH AGENT &middot; EXECUTIVE BRIEF</div>'
-        '<div style="font-size:22px;font-weight:700;margin-top:8px">BTC, ETH and XRP against their own history</div>'
-        f'<div style="margin-top:12px;display:inline-block;background:{colors[0]};color:{colors[1]};padding:6px 14px;border-radius:999px;font-weight:700;font-size:13px">'
-        f'{esc(label)}: {esc(summary_line)}</div>{demo}</td></tr>'
-        f'<tr><td style="padding:16px 24px 0;font-size:13px;color:#475569"><i>{esc(agent.QUESTION)}</i></td></tr>'
-        '<tr><td style="padding:14px 24px 8px"><div style="font-size:12px;font-weight:700;color:#1e40af;letter-spacing:.05em">HEADLINES (COMPUTED BY CODE)</div>'
-        f'<ul style="padding-left:18px;margin:8px 0;font-size:14px;line-height:1.5">{items}</ul></td></tr>{ai}'
-        '<tr><td style="padding:6px 24px 22px;font-size:13px;color:#475569">The full brief with charts is attached as an HTML file. Open it in a browser. '
-        'Education only, not financial advice. No forecast and no recommendation.</td></tr></table></div>')
+        f'<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent">{esc(deck)}</div>'
+        '<div style="background:#E9EDF3;padding:18px;font-family:Segoe UI,Helvetica,Arial,sans-serif;color:#0A0E16">'
+        '<table role="presentation" width="640" align="center" style="max-width:640px;width:100%;background:#FFFFFF;border-radius:10px;border-collapse:collapse;overflow:hidden">'
+        '<tr><td style="background:#0A0E16;padding:26px 28px;color:#F2F4F8">'
+        f'<div style="font-size:12px;letter-spacing:.16em;font-weight:700;color:#F6B73C">CRYPTO WATCH &middot; DAILY BRIEF &middot; {esc(as_of)} UTC CLOSE</div>'
+        f'<div style="font-size:30px;line-height:1.1;font-weight:800;margin-top:10px;text-transform:uppercase">{esc(hero_title(data))}</div>'
+        f'<div style="margin-top:12px;display:inline-block;background:{pill[0]};color:{pill[1]};padding:5px 12px;border-radius:4px;font-weight:700;font-size:12px;letter-spacing:.1em">{shown}</div>{demo}</td></tr>'
+        f'<tr><td style="padding:18px 28px 6px;font-size:16px;line-height:1.5;color:#2A3446">{esc(deck)}</td></tr>'
+        f'<tr><td style="padding:10px 28px 4px"><div style="font-size:12px;font-weight:700;color:#0A0E16;letter-spacing:.1em">TOP 3 HEADLINES</div>'
+        f'<table role="presentation" width="100%" style="border-collapse:collapse;margin-top:8px">{top}</table></td></tr>'
+        f'<tr><td style="padding:14px 28px 6px"><table role="presentation" width="100%" style="border-collapse:separate"><tr>{strip}</tr></table></td></tr>{ai}'
+        '<tr><td style="padding:6px 28px 6px;font-size:14px;line-height:1.5;color:#2A3446"><b>Open the attached file</b> (<i>crypto-watch-executive-brief.html</i>) in a browser for the interactive charts, '
+        'the history study and the full tables. To ask the playbook a question, run <span style="font-family:Consolas,Menlo,monospace">python rag_server.py</span> on your computer and open '
+        f'<span style="font-family:Consolas,Menlo,monospace">{esc(RAG_URL)}</span>.</td></tr>'
+        f'<tr><td style="padding:14px 28px 22px;font-size:12px;line-height:1.5;color:#5B6678;border-top:1px solid #E3E7EE">Created by <b>{esc(CREDIT)}</b><br>'
+        'Live market-data analysis and decision support. Not investment advice: no forecast and no recommendation. Every number is computed by code from Kraken daily candles and the other free sources named in the attached report.</td></tr>'
+        '</table></div>')
 
 
 def send_email(data, page):
-    label, _, summary_line = status_of(data)
-    subject = f"Crypto watch executive brief: {label} ({summary_line})"[:200]
+    subject = insights.subject_line(data["coins"])[:200]
     try:
         agent.sheet_post({"action": "report", "subject": subject, "summary_html": build_email(data), "html": page})
     except agent.AgentError as error:
@@ -843,7 +1384,7 @@ def send_email(data, page):
                 if ("INVALID_ACTION" in text or "INVALID_REQUEST" in text) else "")
         print(f"::warning::Report email not sent: {text}.{hint}", flush=True)
         return False
-    print("[report] email sent", flush=True)
+    print(f"[report] email sent: {subject}", flush=True)
     return True
 
 
@@ -867,11 +1408,13 @@ def main(argv=None):
         context = gather_context()
         decisions, note = fetch_decisions()
     data = {"coins": coins, "cross": cross, "context": context, "decisions": decisions, "decisions_note": note, "demo": args.demo,
-            "generated": now.strftime("%Y-%m-%d %H:%M")}
+            "generated": now.strftime("%Y-%m-%d %H:%M"), "generated_long": now.strftime("%A %d %B %Y"),
+            "events": insights.event_study(coins)}
     page = build_html(data)
     with open(args.out, "w", encoding="utf-8") as handle:
         handle.write(page)
     print(f"[report] wrote {args.out} ({len(page) // 1024} KB): {status_of(data)[0]}, {len(good(data))} of {len(coins)} coins with data", flush=True)
+    print(f"[report] subject: {insights.subject_line(coins)}", flush=True)
     for line in headlines(data):
         print(f"[report]   {line}", flush=True)
     if args.email and not args.demo:

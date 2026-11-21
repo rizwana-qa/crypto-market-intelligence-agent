@@ -8,6 +8,10 @@ on:
       - "sources.py"
       - "scenarios.py"
       - "report.py"
+      - "insights.py"
+      - "rag.py"
+      - "rag_server.py"
+      - "rag_ui.html"
       - "export_data.py"
       - "features.py"
       - "validate_data.py"
@@ -70,6 +74,12 @@ jobs:
 
       - name: Report tests (offline)
         run: python tests/test_report.py -v
+
+      - name: Insights tests (offline)
+        run: python tests/test_insights.py -v
+
+      - name: Ask page tests (retrieval, answer guardrails, local server) (offline)
+        run: python tests/test_rag.py -v
 
       - name: Sources tests (offline)
         run: python tests/test_sources.py -v

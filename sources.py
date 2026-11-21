@@ -27,8 +27,8 @@ COINGECKO_IDS = {"BTC": "bitcoin", "ETH": "ethereum", "XRP": "ripple"}
 FUTURES_BASES = {"BTC": ("XBT", "BTC"), "ETH": ("ETH",), "XRP": ("XRP",)}   # Kraken Futures calls Bitcoin XBT on some contracts
 DERIBIT_CURRENCIES = {"BTC", "ETH"}     # Deribit publishes a volatility index (DVOL) for these two only
 
-DEPTH_LEVELS = 100          # order-book levels fetched per side
-DEPTH_BAND = 0.01           # depth is counted within 1% of the mid price
+DEPTH_LEVELS = 500          # order-book levels fetched per side (Kraken allows 1 to 500; the default of 100 did not reach 1% on a live check)
+DEPTH_BAND = 0.01           # depth is counted within 1% of the mid price, or within the narrower range both sides of the book cover
 PRICE_TOLERANCE_PCT = 1.0   # two live prices that differ by more than this are flagged (a data-quality convention, see playbook.md)
 MIN_RANK_DAYS = 90          # fewer completed days than this: no rank is given
 VOLUME_WINDOW = 30
@@ -111,7 +111,9 @@ def volume_ratio_series(volumes, window=VOLUME_WINDOW):
 
 # ---- Kraken order book: liquidity ---------------------------------------------------------------------------------------
 def parse_depth(body):
-    """Spread and the order-book depth within 1% of the mid price. Reads the one pair in the reply."""
+    """Spread and the order-book depth around the mid price. Reads the one pair in the reply.
+    The band is 1% of the mid price, or less when either side of the fetched book does not reach 1%. Both sides always use the same band,
+    so bid and ask depth can be compared, and the band is reported."""
     if not isinstance(body, dict) or body.get("error") or not isinstance(body.get("result"), dict) or len(body["result"]) != 1:
         raise SourceError("unexpected order book reply")
     book = next(iter(body["result"].values()))
@@ -123,14 +125,14 @@ def parse_depth(body):
     if best_bid <= 0 or best_ask < best_bid:
         raise SourceError("crossed or invalid order book")
     mid = (best_bid + best_ask) / 2.0
-    low, high = mid * (1 - DEPTH_BAND), mid * (1 + DEPTH_BAND)
+    reach = min(mid * DEPTH_BAND, mid - min(p for p, _ in bids), max(p for p, _ in asks) - mid)
+    low, high, slack = mid - reach, mid + reach, mid * 1e-9      # slack: the farthest level sits exactly on the edge of its own band
     return {
         "mid_price": round(mid, 6),
         "spread_pct": round((best_ask - best_bid) / mid * 100.0, 4),
-        "bid_depth_1pct_usd": round(sum(p * v for p, v in bids if p >= low), 2),
-        "ask_depth_1pct_usd": round(sum(p * v for p, v in asks if p <= high), 2),
-        # fewer levels than 1% of price: the depth is a lower bound, not the full depth
-        "depth_is_lower_bound": min(p for p, _ in bids) > low or max(p for p, _ in asks) < high,
+        "bid_depth_usd": round(sum(p * v for p, v in bids if p >= low - slack), 2),
+        "ask_depth_usd": round(sum(p * v for p, v in asks if p <= high + slack), 2),
+        "depth_band_pct": round(reach / mid * 100.0, 3),
     }
 
 
@@ -197,7 +199,7 @@ def parse_dvol(body, now):
 
 
 def fetch_dvol(currency, now):
-    params = {"currency": currency, "start_timestamp": int((now - 400 * SECONDS_PER_DAY) * 1000),
+    params = {"currency": currency, "start_timestamp": int((now - 366 * SECONDS_PER_DAY) * 1000),
               "end_timestamp": int(now * 1000), "resolution": "1D"}
     return parse_dvol(get_json(DERIBIT_URL, params), now)
 

@@ -57,8 +57,8 @@ def fake_context(btc_mid=67210.5, mids=None, btc_price_gap=0.1, funding=0.004, o
         return sources.build_context(coins, {c: gone for c in coins}, {c: gone for c in coins}, {c: gone for c in coins},
                                      gone, {}, gone, AS_OF + "T05:17Z")
     mids = {"BTC": btc_mid, "ETH": 3105.2, "XRP": 2.3012, **(mids or {})}
-    depth = {c: {"mid_price": mids[c], "spread_pct": 0.0012 if c == "BTC" else 0.004, "bid_depth_1pct_usd": 14.2e6 if c == "BTC" else 3.1e6,
-                 "ask_depth_1pct_usd": 13.8e6 if c == "BTC" else 3.0e6, "depth_is_lower_bound": False} for c in coins}
+    depth = {c: {"mid_price": mids[c], "spread_pct": 0.0012 if c == "BTC" else 0.004, "bid_depth_usd": 14.2e6 if c == "BTC" else 3.1e6,
+                 "ask_depth_usd": 13.8e6 if c == "BTC" else 3.0e6, "depth_band_pct": 1.0} for c in coins}
     futures = {c: {"symbol": f"PF_{'XBT' if c == 'BTC' else c}USD", "funding_rate_pct_per_hour": funding if c == "BTC" else 0.002,
                    "funding_pays": "longs pay shorts", "open_interest": round(open_interest_usd / mids[c], 4) if c == "BTC" else {"ETH": 3.0e5, "XRP": 2.5e8}[c],
                    "open_interest_usd_approx": open_interest_usd if c == "BTC" else round({"ETH": 3.0e5, "XRP": 2.5e8}[c] * mids[c], 0)} for c in coins}

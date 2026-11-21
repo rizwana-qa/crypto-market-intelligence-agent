@@ -576,7 +576,7 @@ def context_rows(evidence, version, stamp, run_id):
         missing = [name for name in ("liquidity", "derivatives", "implied_volatility", "market_wide", "price_check") if not part(name)]
         s = stats.get(coin, {})
         rows.append([stamp, run_id, version, coin, liq.get("mid_price", ""), liq.get("spread_pct", ""),
-                     liq.get("bid_depth_1pct_usd", ""), liq.get("ask_depth_1pct_usd", ""),
+                     liq.get("bid_depth_usd", ""), liq.get("ask_depth_usd", ""), liq.get("depth_band_pct", ""),
                      der.get("funding_rate_pct_per_hour", ""), der.get("funding_pays", ""), der.get("open_interest_usd_approx") or "",
                      iv.get("implied_vol_pct", ""), "" if iv.get("rank_1y") is None else iv["rank_1y"],
                      wide.get("volume_24h_usd", ""), wide.get("market_volume_ratio_30d", ""), wide.get("market_volume_rank", ""),

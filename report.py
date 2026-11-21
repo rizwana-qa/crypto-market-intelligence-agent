@@ -610,9 +610,8 @@ def market_context_section(data):
     for coin, piece in context["coins"].items():
         liq, der, iv, wide, check = (piece.get(k) for k in ("liquidity", "derivatives", "implied_volatility", "market_wide", "price_check"))
         if sources.is_data(liq):
-            bound = " (at least)" if liq.get("depth_is_lower_bound") else ""
-            liq_html = (f'spread {liq["spread_pct"]:.4f}%<br><span class="muted">bid {_usd(liq["bid_depth_1pct_usd"])} / '
-                        f'ask {_usd(liq["ask_depth_1pct_usd"])} within 1%{bound}</span>')
+            liq_html = (f'spread {liq["spread_pct"]:.4f}%<br><span class="muted">bid {_usd(liq["bid_depth_usd"])} / '
+                        f'ask {_usd(liq["ask_depth_usd"])} within {liq["depth_band_pct"]:g}% of the price</span>')
         else:
             liq_html = _missing(liq)
         if sources.is_data(der):

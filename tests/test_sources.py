@@ -33,6 +33,17 @@ def tab_width(name):
     return len(re.findall(r"'[^']*'", row))
 
 
+def tab_headers(name):
+    block = re.search(r"const EXTRA_TABS = \{(.*?)\n\};", CODE_GS, re.S).group(1)
+    row = re.search(name + r": \[(.*?)\]", block, re.S).group(1)
+    return re.findall(r"'([^']*)'", row)
+
+
+def cell(row, header, tab="context_data"):
+    """The value of a Sheet row under a column header taken from Code.gs, so a swapped column cannot pass."""
+    return row[tab_headers(tab).index(header)]
+
+
 def day_start(days_ago):
     """Unix seconds at 00:00 UTC, `days_ago` days before NOW's UTC day."""
     midnight = int(NOW // DAY) * DAY
@@ -40,10 +51,10 @@ def day_start(days_ago):
 
 
 # ---- sample replies ------------------------------------------------------------------------------------------------------
-def depth_body(mid=100.0, half_spread=0.05, levels=100, step=0.02, size=10.0):
+def depth_body(mid=100.0, half_spread=0.05, levels=100, step=0.02, size=10.0, ask_levels=None):
     """Bids go down from mid - half_spread, asks up from mid + half_spread, `step` apart, each `size` coins."""
     bids = [[f"{mid - half_spread - i * step:.4f}", f"{size}", 1700000000] for i in range(levels)]
-    asks = [[f"{mid + half_spread + i * step:.4f}", f"{size}", 1700000000] for i in range(levels)]
+    asks = [[f"{mid + half_spread + i * step:.4f}", f"{size}", 1700000000] for i in range(ask_levels or levels)]
     return {"error": [], "result": {"XBTUSD": {"bids": bids, "asks": asks}}}
 
 
@@ -109,16 +120,28 @@ class OrderBook(unittest.TestCase):
         # band = 99.00 to 101.00. Bid levels at 99.95 - 0.02 i >= 99.00: i <= 47.5, so i = 0..47 = 48 levels of 10 coins
         # price sum for i = 0..47 of (99.95 - 0.02 i) = 48 * 99.95 - 0.02 * (47 * 48 / 2) = 4797.6 - 22.56 = 4775.04; times 10 = 47750.4
         # ask levels at 100.05 + 0.02 i <= 101.00: i <= 47.5, so 48 levels: 48 * 100.05 + 22.56 = 4802.4 + 22.56 = 4824.96; times 10 = 48249.6
+        # both sides reach 2.03 %, so the band is the full 1 %
         result = sources.parse_depth(depth_body())
         self.assertEqual(result["mid_price"], 100.0)
         self.assertEqual(result["spread_pct"], 0.1)
-        self.assertEqual(result["bid_depth_1pct_usd"], 47750.4)
-        self.assertEqual(result["ask_depth_1pct_usd"], 48249.6)
-        self.assertFalse(result["depth_is_lower_bound"])
+        self.assertEqual(result["bid_depth_usd"], 47750.4)
+        self.assertEqual(result["ask_depth_usd"], 48249.6)
+        self.assertEqual(result["depth_band_pct"], 1.0)
 
-    def test_a_book_that_does_not_reach_1_percent_is_marked_as_a_lower_bound(self):
+    def test_a_book_that_does_not_reach_1_percent_uses_the_range_it_covers_and_says_so(self):
+        # 5 levels each side: bids 99.95, 99.93, 99.91, 99.89, 99.87 and asks 100.05 ... 100.13, so each side reaches 0.13 % from the mid
+        # bid depth = (99.95 + 99.93 + 99.91 + 99.89 + 99.87) * 10 = 4995.5 ; ask depth = (100.05 + 100.07 + 100.09 + 100.11 + 100.13) * 10 = 5004.5
         result = sources.parse_depth(depth_body(levels=5))
-        self.assertTrue(result["depth_is_lower_bound"])
+        self.assertEqual(result["depth_band_pct"], 0.13)
+        self.assertEqual(result["bid_depth_usd"], 4995.5)
+        self.assertEqual(result["ask_depth_usd"], 5004.5)
+
+    def test_bid_and_ask_depth_always_use_the_same_band(self):
+        # bids reach 2.03 % but asks only 0.13 %: the band is 0.13 % for both, so the bid at 99.85 (0.15 % away) is left out
+        result = sources.parse_depth(depth_body(levels=100, ask_levels=5))
+        self.assertEqual(result["depth_band_pct"], 0.13)
+        self.assertEqual(result["bid_depth_usd"], 4995.5)
+        self.assertEqual(result["ask_depth_usd"], 5004.5)
 
     def test_bad_books_are_refused(self):
         for body in ({"error": ["EQuery:Unknown asset pair"], "result": {}}, {}, [], {"error": [], "result": {}},
@@ -498,42 +521,32 @@ class ContextRows(unittest.TestCase):
         self.assertEqual([r[3] for r in rows], ["BTC", "ETH", "XRP"])
         for row in rows:
             self.assertEqual(len(row), tab_width("context_data"))
-        self.assertEqual(tab_width("context_data"), 24)
+        self.assertEqual(tab_width("context_data"), 25)
 
-    def test_values_land_in_the_right_columns(self):
+    def test_values_land_under_the_right_headers(self):
         row = agent.context_rows(self.evidence(), "Agent loop", "t", "1")[0]
-        self.assertEqual(row[4], 67210.5)                            # Kraken mid
-        self.assertEqual(row[5], 0.0012)                             # spread %
-        self.assertEqual(row[6], 14.2e6)                             # bid depth within 1%
-        self.assertEqual(row[7], 13.8e6)                             # ask depth within 1%
-        self.assertEqual(row[8], 0.004)                              # funding rate % per hour
-        self.assertEqual(row[9], "longs pay shorts")
-        self.assertEqual(row[10], 9.0e8)                             # open interest in USD
-        self.assertEqual(row[11], 46.8)                              # implied volatility %
-        self.assertEqual(row[13], 31.5e9)                            # market volume 24h
-        self.assertEqual(row[14], 1.04)                              # market volume vs 30-day average
-        self.assertEqual(row[15], 44.0)                              # market volume rank
-        self.assertEqual(row[16], 65126.45)                          # CoinGecko price (67210.5 / 1.032)
-        self.assertEqual(row[17], 3.2)                               # price difference %
-        self.assertEqual(row[19], "Neutral")
-        self.assertEqual(row[21], 19)                                # BTC alert episodes
-        self.assertEqual(row[12], 48.0)                              # implied vol rank
-        self.assertEqual(row[18], 52)                                # fear and greed value
-        self.assertEqual(row[20], 8.4)                               # BTC share of alert-rank days
-        self.assertEqual(row[22], "price sources BTC disagree")
-        self.assertEqual(row[23], "ok")
+        expected = {"Coin": "BTC", "Kraken mid (USD)": 67210.5, "Spread %": 0.0012, "Bid depth in band (USD)": 14.2e6,
+                    "Ask depth in band (USD)": 13.8e6, "Depth band % of price": 1.0, "Funding rate % per hour": 0.004,
+                    "Funding pays": "longs pay shorts", "Open interest (USD, approx)": 9.0e8, "Implied vol % (annualised)": 46.8,
+                    "Implied vol rank (1y)": 48.0, "Market volume 24h (USD)": 31.5e9, "Market volume vs 30d avg (x)": 1.04,
+                    "Market volume rank": 44.0, "CoinGecko price (USD)": 65126.45, "Price difference %": 3.2, "Fear and greed": 52,
+                    "Fear and greed label": "Neutral", "Alert-rank days %": 8.4, "Alert episodes": 19,
+                    "Context flags": "price sources BTC disagree", "Status": "ok"}
+        for header, value in expected.items():
+            self.assertEqual(cell(row, header), value, msg=header)
+        self.assertEqual(set(expected) | {"Time (UTC)", "Run ID", "Version"}, set(tab_headers("context_data")))   # every column is checked
 
     def test_unavailable_pieces_are_blank_cells_and_the_status_names_them(self):
         row = agent.context_rows(self.evidence(context=scenarios.fake_context(unavailable_all=True), stats={"error": "x"}), "v", "t", "1")[2]
-        self.assertEqual(row[4], "")
-        self.assertEqual(row[8], "")
-        self.assertTrue(row[23].startswith("partial: liquidity, derivatives, implied_volatility, market_wide"))
-        self.assertEqual(row[20], "")
+        self.assertEqual(cell(row, "Kraken mid (USD)"), "")
+        self.assertEqual(cell(row, "Funding rate % per hour"), "")
+        self.assertTrue(cell(row, "Status").startswith("partial: liquidity, derivatives, implied_volatility, market_wide"))
+        self.assertEqual(cell(row, "Alert-rank days %"), "")
 
     def test_xrp_has_no_implied_volatility_and_the_status_says_so(self):
         row = agent.context_rows(self.evidence(), "v", "t", "1")[2]
-        self.assertEqual(row[11], "")
-        self.assertEqual(row[23], "partial: implied_volatility")
+        self.assertEqual(cell(row, "Implied vol % (annualised)"), "")
+        self.assertEqual(cell(row, "Status"), "partial: implied_volatility")
 
     def test_no_rows_when_the_context_tool_failed_or_was_not_called(self):
         self.assertEqual(agent.context_rows([{"tool": "get_market_context", "args": {}, "result": {"error": "x"}}], "v", "t", "1"), [])

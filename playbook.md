@@ -80,11 +80,11 @@ Reason: a single number such as the distance from the 30-day average cannot say 
 ## Liquidity (order book)
 Keywords: liquidity, order book, spread, depth, thin, bid, ask, slippage, resting orders.
 
-Definition: from Kraken's public order book (100 levels each side). The spread is the best ask minus the best bid, divided by the mid price, in percent. Depth is the dollar value (price times size) of the resting bids and of the resting asks within 1% of the mid price. If the 100 levels do not reach 1%, the field depth_is_lower_bound is true and the depth is at least that much.
+Definition: from Kraken's public order book (up to 500 levels each side). The spread is the best ask minus the best bid, divided by the mid price, in percent. Depth is the dollar value (price times size) of the resting bids and of the resting asks within a band around the mid price. The band is 1% of the price, or narrower when either side of the fetched book does not reach 1%. Both sides always use the same band, so bid and ask depth can be compared, and the band is given in depth_band_pct.
 
 Rule: describe the numbers as returned. There is no stored history to rank them against, so liquidity is never flagged and never raises an alert. Never say what the depth means for the next price move.
 
-Reason: a wide spread and thin depth describe how easily the market absorbs trades right now, not where the price goes. Source: Kraken REST API documentation (Depth); the 1% band is own convention.
+Reason: a wide spread and thin depth describe how easily the market absorbs trades right now, not where the price goes. Source: Kraken REST API documentation (Depth, up to 500 levels); the 1% band is own convention.
 
 ## Derivatives (funding rate and open interest)
 Keywords: funding, funding rate, open interest, perpetual, futures, leverage, longs, shorts, derivatives, crowded.

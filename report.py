@@ -241,8 +241,11 @@ def status_of(data):
     if not good(data):
         return "NO DATA", "grey", "Market data unavailable for every coin"
     alerted = [c["coin"] for c in breaching(data)]
+    down = insights.unavailable(data["coins"])
     if alerted:
-        return "ALERT", "red", "At the alert rank: " + ", ".join(alerted)
+        return "ALERT", "red", "At the alert rank: " + ", ".join(alerted) + (". Unavailable: " + ", ".join(down) if down else "")
+    if down:
+        return "PARTIAL", "amber", f"Partial data: {_join_and(down)} unavailable. No other coin at the alert rank"
     return "CALM", "green", "No coin at the alert rank"
 
 
@@ -571,6 +574,7 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 .badge{font-weight:700;font-size:12px;border-radius:4px;padding:2px 8px}
 .badge.ALERT{background:rgba(229,72,63,.2);color:#FF9C94}.badge.NEAR{background:rgba(246,183,60,.16);color:var(--amber)}
 .badge.CALM{background:rgba(125,217,160,.14);color:var(--green)}.badge.NODATA{background:#2A3446;color:var(--muted)}
+.badge.PARTIAL{background:rgba(246,183,60,.16);color:var(--amber)}.live.partial,.badge2.partial{background:#9A6414}
 .row2{display:flex;flex-wrap:wrap;gap:16px;align-items:stretch}
 .panel{flex:1 1 560px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:22px 24px 20px;display:flex;flex-direction:column;gap:6px}
 .panel h3{margin:0;font-size:12px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--text)}
@@ -657,6 +661,9 @@ def hero_title(data):
         if coin not in names:
             names.append(coin)
     if not names:
+        down = insights.unavailable(data["coins"])
+        if down:
+            return f"Partial data: {_join_and(down)} unavailable, no other coin at its alert rank"
         return "Calm market: no coin at its alert rank"
     if len(names) == 1:
         return f"{coin_name(names[0])} breaches its own history"
@@ -673,6 +680,8 @@ def hero_deck(data):
     if not good(data):
         return "Kraken did not return complete, current candles for any coin, so no statement is made about the market today."
     hits = insights.breaches(coins)
+    down = insights.unavailable(coins)
+    gone = f"{_join_and(down)} {'is' if len(down) == 1 else 'are'} unavailable today, so no statement is made for {'it' if len(down) == 1 else 'them'}." if down else ""
     parts = []
     if hits:
         rank, coin, metric, s = hits[0]
@@ -692,10 +701,14 @@ def hero_deck(data):
                      for metrics, names in by_metrics.items()]
         if sentences:
             parts.append("; ".join(sentences[:2]) + ".")
+        if gone:
+            parts.append(gone)
     else:
         closest = sorted(((max(c["summary"]["ranks"].values()), c["coin"], c) for c in good(data)), key=lambda t: (-t[0], t[1]))[0]
         metric = max(closest[2]["summary"]["ranks"], key=closest[2]["summary"]["ranks"].get)
-        parts.append(f"No coin reached the alert rank of {agent.ALERT_RANK:g}. The closest is {closest[1]} at rank {closest[0]:.1f} on {insights.METRIC_TEXT[metric]}.")
+        if gone:
+            parts.append(gone)
+        parts.append(f"No {'other ' if down else ''}coin reached the alert rank of {agent.ALERT_RANK:g}. The closest is {closest[1]} at rank {closest[0]:.1f} on {insights.METRIC_TEXT[metric]}.")
     volume = insights._volume_fact(coins)
     if volume:
         lo, hi = min(r for _, r in volume), max(r for _, r in volume)
@@ -721,12 +734,12 @@ def coin_status(summary):
 
 
 def tone_class(tone):
-    return {"red": "", "green": " calm", "grey": " nodata"}[tone]
+    return {"red": "", "green": " calm", "grey": " nodata", "amber": " partial"}[tone]
 
 
 def brand_bar(data, as_of):
     label, tone, _ = status_of(data)
-    shown = {"ALERT": "Alert", "CALM": "Calm", "NO DATA": "No data"}[label]
+    shown = {"ALERT": "Alert", "CALM": "Calm", "NO DATA": "No data", "PARTIAL": "Partial data"}[label]
     return (f'<div class="bar"><div class="wrap"><div class="brand"><span class="logo">Crypto Watch</span>'
             f'<span class="live{tone_class(tone)}"><span class="dot"></span>{shown}</span>'
             f'<span class="byline">Created by <span class="credit">{esc(CREDIT)}</span></span></div>'
@@ -789,7 +802,7 @@ def scoreboard(data):
 
 def hero(data, as_of):
     label, tone, _ = status_of(data)
-    shown = {"ALERT": "Alert", "CALM": "Calm market", "NO DATA": "No data"}[label]
+    shown = {"ALERT": "Alert", "CALM": "Calm market", "NO DATA": "No data", "PARTIAL": "Partial data"}[label]
     demo = '<span class="badge2" style="background:#B7791F">Demo data: synthetic prices</span>' if data.get("demo") else ""
     return (f'<div class="hero"><div class="lead"><div class="meta"><span class="badge2{tone_class(tone)}"><span class="dot"></span>{shown}</span>{demo}'
             f'<span>Data as of {esc(as_of)} (latest completed UTC day) &middot; generated {esc(data["generated"])} UTC</span></div>'
@@ -1568,7 +1581,7 @@ def email_facts(data):
     events = data.get("events")
     return {
         "title": hero_title(data), "deck": deck, "preheader": deck[:140], "as_of": as_of, "generated": data["generated"], "credit": CREDIT, "demo": bool(data.get("demo")),
-        "status": {"label": {"ALERT": "ALERT", "CALM": "CALM MARKET", "NO DATA": "NO DATA"}[label], "tone": tone},
+        "status": {"label": {"ALERT": "ALERT", "CALM": "CALM MARKET", "NO DATA": "NO DATA", "PARTIAL": "PARTIAL DATA"}[label], "tone": tone},
         "method": f"Each coin is ranked against its own past {history_days(data)} days. This describes how unusual today is. It is not a forecast of what comes next.",
         "links": {"report_url": public_url("REPORT_URL"), "ask_url": public_url("ASK_URL"), "attachment": ATTACHMENT_NAME, "launcher": LAUNCHER},
         "scoreboard": scoreboard,
@@ -1646,6 +1659,9 @@ def main(argv=None):
         handle.write(page)
     print(f"[report] wrote {args.out} ({len(page) // 1024} KB): {status_of(data)[0]}, {len(good(data))} of {len(coins)} coins with data", flush=True)
     print(f"[report] subject: {insights.subject_line(coins)}", flush=True)
+    down = insights.unavailable(coins)
+    if down:
+        print(f"::warning::No valid data for {', '.join(down)}. Report status: {status_of(data)[0]}.", flush=True)
     for line in headlines(data):
         print(f"[report]   {line}", flush=True)
     email_failed = False

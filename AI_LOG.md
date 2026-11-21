@@ -209,3 +209,16 @@ This log records real events from the build sessions. Read it once and change an
 - If the history cannot be read, nothing is blocked. The other choice, blocking every alert on a Sheet outage, would silence real alerts.
 - Ten offline tests cover it. Disabling the guard, changing "all coins" to "any coin" and removing the history fetch were each caught by a test.
 - Not done: the real-AI scenarios were not re-run (they cost tokens and the daily cap is used up today). The change has not run on live data.
+
+
+## 19. Scoreboard alignment, and a plan for the versions with no real-AI result
+
+**Prompt (in short):** a screenshot of the Breach scoreboard card ("ui alignment required to fix"), then "agent + reviewer is implemented, agent loop and reviewer is not run, results as per read me, planner and reviewer no results, is it implemented or what we missed?" and "yes update read me".
+
+**Result:** the scoreboard rows now line up: each metric is three cells (name, value, rank chip) in a fixed grid, the rank chips are all the same width, and the layout follows the width of the card, not the width of the screen (CSS container query), so it also holds when the card is narrow beside the status badge. Two offline tests check the markup and the CSS rule. For the second question: all four versions are implemented and tested offline with a scripted AI; three have no real-AI result. The README now has a plan to run them by hand, one version a day, with scenarios 2, 5, 14 and 15.
+
+**What the AI got wrong or I changed:**
+- The old rows used a fixed 96 px column and a screen-width breakpoint, so at some card widths the value and the rank chip ran into each other. I checked the new layout in Chrome at 8 widths from 320 to 1440 px (no overflow, columns aligned). I did not check it in Safari or on a real phone.
+- Browsers without container query support get the stacked layout, which is also the narrow one. Nothing breaks, it is only less wide.
+- The cost of a reviewer or planner run is an estimate (100,000 to 130,000 tokens for four scenarios). It has not been measured, so the first run is also the measurement.
+- Not done: no real-AI result was added. The README table still says "Not run" and "No result" until a run has finished.

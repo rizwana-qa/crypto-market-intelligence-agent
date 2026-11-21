@@ -527,11 +527,17 @@ h1{margin:0;font-family:"Barlow Condensed","Arial Narrow",sans-serif;font-weight
 .badge2 .dot{margin-right:8px}
 .score{flex:1 1 380px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:22px 26px 10px;display:flex;flex-direction:column;gap:4px}
 .cap{font-size:12px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
-.srow{display:grid;grid-template-columns:96px minmax(0,1fr);gap:14px;padding:16px 0;border-top:1px solid var(--line);align-items:start}
-.srow .code{font-family:"Barlow Condensed","Arial Narrow",sans-serif;font-weight:700;font-size:44px;line-height:1}
-.srow .nm{font-size:12px;color:var(--muted)}
-.srow dl{margin:0;display:grid;grid-template-columns:1fr auto;gap:6px 14px;font-size:14px}
-.srow dt{color:var(--muted);white-space:nowrap}.srow dd{margin:0;text-align:right;white-space:nowrap;font-family:"JetBrains Mono",ui-monospace,Menlo,monospace}
+.score{container:score/inline-size}
+.srow{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;padding:16px 0;border-top:1px solid var(--line);align-items:center}
+.srow .who{display:flex;flex-direction:row;flex-wrap:wrap;align-items:center;gap:4px 12px;min-width:0}
+.srow .code{font-family:"Barlow Condensed","Arial Narrow",sans-serif;font-weight:700;font-size:34px;line-height:1}
+.srow .nm{font-size:12px;line-height:1.2;color:var(--muted)}
+.srow dl{margin:0;display:grid;grid-template-columns:minmax(0,1fr) auto 52px;gap:8px 12px;align-items:center;font-size:14px}
+.srow dt{color:var(--muted);white-space:nowrap}
+.srow dd{margin:0;white-space:nowrap}
+.srow dd.v{text-align:right;font-family:"JetBrains Mono",ui-monospace,Menlo,monospace}
+.srow dd.r{display:flex;justify-content:flex-end}
+@container score (min-width:460px){.srow{grid-template-columns:96px minmax(0,1fr);gap:14px 18px}.srow .who{flex-direction:column;align-items:flex-start;gap:5px}.srow .code{font-size:44px}}
 .score .foot{font-size:12px;color:var(--muted);padding:6px 0 12px;border-top:1px solid var(--line)}
 .sh{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
 .sh h2{margin:0;font-family:"Barlow Condensed","Arial Narrow",sans-serif;font-weight:700;font-size:30px;text-transform:uppercase;letter-spacing:.02em}
@@ -560,7 +566,7 @@ th{text-align:left;font-size:12px;color:var(--muted);text-transform:uppercase;le
 td{padding:10px;border-bottom:1px solid var(--line);vertical-align:top;color:var(--soft)}
 td b{color:var(--text)}
 td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
-.rank{display:inline-block;min-width:44px;text-align:center;border-radius:4px;padding:1px 6px;font-weight:700;font-size:13px;font-family:"JetBrains Mono",ui-monospace,Menlo,monospace}
+.rank{display:inline-block;min-width:52px;text-align:center;border-radius:4px;padding:1px 6px;font-weight:700;font-size:13px;font-family:"JetBrains Mono",ui-monospace,Menlo,monospace}
 .rank.hi{background:rgba(229,72,63,.2);color:#FF9C94}.rank.mid{background:rgba(246,183,60,.16);color:var(--amber)}.rank.lo{background:#1A2231;color:var(--muted)}
 .badge{font-weight:700;font-size:12px;border-radius:4px;padding:2px 8px}
 .badge.ALERT{background:rgba(229,72,63,.2);color:#FF9C94}.badge.NEAR{background:rgba(246,183,60,.16);color:var(--amber)}
@@ -600,7 +606,7 @@ footer .by .credit{font-size:18px}
 @keyframes byline{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:none}}
 .live .dot,.badge2 .dot{animation:pulse 1.8s ease-in-out infinite}
 @media (prefers-reduced-motion:reduce){.track,.hl,.tile,.byline,.live .dot,.badge2 .dot{animation:none}.credit{animation:none;background:none;-webkit-text-fill-color:var(--text);color:var(--text)}}
-@media (max-width:640px){.wrap{padding:0 18px}.deck{font-size:18px}.srow{grid-template-columns:72px minmax(0,1fr)}.card{padding:18px}table{font-size:13px}}
+@media (max-width:640px){.wrap{padding:0 18px}.deck{font-size:18px}.card{padding:18px}table{font-size:13px}}
 @media print{body{background:#fff;color:#111}.track{animation:none}.card,.tile,.hl,.score,.panel{break-inside:avoid}}
 """
 
@@ -769,13 +775,14 @@ def scoreboard(data):
     rows = []
     for c in data["coins"]:
         if "error" in c:
-            rows.append(f'<div class="srow"><div><div class="code">{esc(c["coin"])}</div></div><div class="muted">Data unavailable: {esc(c["error"])}. No statement is made for this coin.</div></div>')
+            rows.append(f'<div class="srow"><div class="who"><div class="code">{esc(c["coin"])}</div></div><div class="muted">Data unavailable: {esc(c["error"])}. No statement is made for this coin.</div></div>')
             continue
         s = c["summary"]
         status = coin_status(s)
-        lines = "".join(f'<dt>{esc(SCORE_LABELS[m])}</dt><dd>{esc(insights.metric_value(s, m))} {rank_cell(s["ranks"][m])}</dd>' for m in agent.METRICS)
-        rows.append(f'<div class="srow"><div><div class="code">{esc(c["coin"])}</div><div class="nm">{esc(coin_name(c["coin"]))}</div>'
-                    f'<div style="margin-top:6px"><span class="badge {status}">{status}</span></div></div><dl>{lines}</dl></div>')
+        lines = "".join(f'<dt>{esc(SCORE_LABELS[m])}</dt><dd class="v">{esc(insights.metric_value(s, m))}</dd><dd class="r">{rank_cell(s["ranks"][m])}</dd>'
+                        for m in agent.METRICS)
+        rows.append(f'<div class="srow"><div class="who"><div class="code">{esc(c["coin"])}</div><div class="nm">{esc(coin_name(c["coin"]))}</div>'
+                    f'<span class="badge {status}">{status}</span></div><dl>{lines}</dl></div>')
     return ('<div class="score"><span class="cap">Breach scoreboard</span>' + "".join(rows) +
             f'<span class="foot">Alert at rank {agent.ALERT_RANK:g} or higher. Near threshold from {NEAR_RANK:g} up to {agent.ALERT_RANK:g}.</span></div>')
 

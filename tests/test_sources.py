@@ -577,6 +577,36 @@ class ContextNeverAlertsAlone(unittest.TestCase):
         self.assertTrue(agent.apply_guardrails(draft, titles, evidence)["alert"])
 
 
+# ---- token accounting -----------------------------------------------------------------------------------------------------------------------------
+class TokenAccounting(unittest.TestCase):
+    def reply(self, usage):
+        class R:
+            ok = True
+            status_code = 200
+            text = ""
+            headers = {}
+
+            def json(self_inner):
+                body = {"choices": [{"message": {"role": "assistant", "content": "x"}}]}
+                if usage is not None:
+                    body["usage"] = usage
+                return body
+        return R()
+
+    def count(self, usage):
+        before = agent.STATS["llm_tokens"]
+        with mock.patch.dict("os.environ", {"GROQ_API_KEY": "k"}), mock.patch.object(agent.requests, "post", return_value=self.reply(usage)):
+            agent.call_llm([{"role": "user", "content": "hi"}])
+        return agent.STATS["llm_tokens"] - before
+
+    def test_tokens_reported_by_the_provider_are_added_up(self):
+        self.assertEqual(self.count({"total_tokens": 1234}), 1234)
+
+    def test_a_missing_or_odd_usage_field_counts_zero_and_never_breaks_the_call(self):
+        for usage in (None, {}, {"total_tokens": "12"}, {"total_tokens": True}, {"total_tokens": -5}, "x"):
+            self.assertEqual(self.count(usage), 0, msg=str(usage))
+
+
 # ---- tools, prompts and the playbook ---------------------------------------------------------------------------------------------------------------------
 class Wiring(unittest.TestCase):
     def test_both_tools_take_no_arguments_and_are_registered_everywhere(self):

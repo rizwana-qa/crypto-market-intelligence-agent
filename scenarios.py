@@ -287,15 +287,16 @@ def scenarios():
 
 def run_scenario(scenario, mode, use_reviewer):
     tools = fake_tools(scenario["markets"], scenario["history"], scenario.get("cross"), scenario.get("context"), scenario.get("stats"))
-    calls_before = agent.STATS["llm_calls"]
+    calls_before, tokens_before = agent.STATS["llm_calls"], agent.STATS["llm_tokens"]
     try:
         decision, evidence = agent.decide(mode, use_reviewer, tools)
     except agent.AgentError as error:
         return {"name": scenario["name"], "passed": False, "finished": False, "why": f"did not finish: {error}",
-                "decision": None, "expected": "", "calls": agent.STATS["llm_calls"] - calls_before}
+                "decision": None, "expected": "", "calls": agent.STATS["llm_calls"] - calls_before,
+                "tokens": agent.STATS["llm_tokens"] - tokens_before}
     passed, expected = scenario["check"](decision, evidence)
     return {"name": scenario["name"], "passed": passed, "finished": True, "decision": decision, "expected": expected,
-            "calls": agent.STATS["llm_calls"] - calls_before,
+            "calls": agent.STATS["llm_calls"] - calls_before, "tokens": agent.STATS["llm_tokens"] - tokens_before,
             "why": ("ok" if passed else f"FAILED: {expected}; decision={json.dumps(decision)}")}
 
 
@@ -329,7 +330,7 @@ def publish(results, version):
 def run_all(mode, use_reviewer, only=None, publish_results=False):
     """The scenarios (all, or the numbers in `only`) on one version. exit_code is 1 when any failed."""
     version = agent.version_name(mode, use_reviewer)
-    agent.STATS.update(llm_calls=0, rate_limit_waits=0)
+    agent.STATS.update(llm_calls=0, rate_limit_waits=0, llm_tokens=0)
     pause = float(os.environ.get("SCENARIO_PAUSE", "0"))
     results, numbered = [], []
     chosen = [(n, sc) for n, sc in enumerate(scenarios(), 1) if only is None or n in only]
@@ -340,18 +341,19 @@ def run_all(mode, use_reviewer, only=None, publish_results=False):
         result = run_scenario(scenario, mode, use_reviewer)
         results.append(result)
         numbered.append((number, result))
-        print(f"{'PASS' if result['passed'] else 'FAIL'}  {result['name']}  {'' if result['passed'] else result['why']}", flush=True)
+        print(f"{'PASS' if result['passed'] else 'FAIL'}  {result['name']}  {'' if result['passed'] else result['why']}"
+              f"  [scenario {number}: {result['calls']} AI calls, {result['tokens']} tokens]", flush=True)
         if pause:
             time.sleep(pause)
     passed = sum(r["passed"] for r in results)
     unfinished = sum(not r["finished"] for r in results)
     print(f"RESULT version={version!r} passed={passed}/{len(results)} llm_calls={agent.STATS['llm_calls']} "
-          f"unfinished={unfinished} rate_limit_waits={agent.STATS['rate_limit_waits']}", flush=True)
+          f"llm_tokens={agent.STATS['llm_tokens']} unfinished={unfinished} rate_limit_waits={agent.STATS['rate_limit_waits']}", flush=True)
     if publish_results:
         publish(numbered, version)
     if passed != len(results):
         print(f"FAILED: {len(results) - passed} scenario(s) failed", flush=True)
-    return {"version": version, "passed": passed, "total": len(results), "llm_calls": agent.STATS["llm_calls"],
+    return {"version": version, "passed": passed, "total": len(results), "llm_calls": agent.STATS["llm_calls"], "llm_tokens": agent.STATS["llm_tokens"],
             "unfinished": unfinished, "exit_code": 0 if passed == len(results) else 1}
 
 

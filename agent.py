@@ -72,7 +72,7 @@ KRAKEN_URL = "https://api.kraken.com/0/public/OHLC"
 PLAYBOOK_PATH = Path(__file__).with_name("playbook.md")
 SECONDS_PER_DAY = 86400
 METRICS = ("volatility", "distance", "drawdown")
-STATS = {"llm_calls": 0, "rate_limit_waits": 0}
+STATS = {"llm_calls": 0, "rate_limit_waits": 0, "llm_tokens": 0}   # llm_tokens: what Groq reports as used, to plan against the free daily cap
 
 
 class AgentError(Exception):
@@ -848,7 +848,12 @@ def call_llm(messages, tools=None):
         if not response.ok:
             raise AgentError(f"Groq error {response.status_code}: {response.text[:300]}")
         STATS["llm_calls"] += 1
-        return response.json()["choices"][0]["message"]
+        body = response.json()
+        usage = body.get("usage")
+        used = usage.get("total_tokens") if isinstance(usage, dict) else None
+        if isinstance(used, int) and not isinstance(used, bool) and used > 0:
+            STATS["llm_tokens"] += used
+        return body["choices"][0]["message"]
     raise AgentError("Groq kept answering with a rate limit")
 
 

@@ -195,3 +195,17 @@ This log records real events from the build sessions. Read it once and change an
 - The README said a push "would starve the daily run" and relied on `[skip ci]` in every commit and PR title. I forgot it once and that was enough. A rule that depends on remembering a tag is a weak guard, so the step itself is now conditional.
 - I could not read Groq's usage page, so "tomorrow's run should work" is an estimate from the rolling 24-hour window, not a measurement.
 - Not done: the daily run has no token budget check of its own. When the cap is reached it waits seven minutes and exits with an error.
+
+
+## 18. The repeat-alert rule is now enforced by the code
+
+**Prompt (in short):** a real-AI scenario failed ("same spike, already alerted yesterday") and I asked what it meant; the owner approved the fix.
+
+**Result:** `apply_guardrails` blocks an alert when every coin in it was already alerted in the last 7 decisions. Before this, only the AI enforced the playbook's Repeat alerts rule. In the failed run, BTC had been alerted yesterday for volatility and the AI alerted BTC again, saying distance and drawdown were new. The rule is per coin, so that broke it. The planner version failed the same scenario earlier (see Results), so this is a repeat weakness, not a one-off.
+
+**What the AI got wrong or I changed:**
+- The guard needs the history, and the AI does not always ask for it. `decide` now reads it itself when an alert is drafted and the AI did not call the tool. That costs one Sheet call and no tokens.
+- Scope kept small on purpose: an alert that holds one new coin and one repeated coin is still left to the AI, because the playbook allows a new coin to alert and the code cannot rewrite the message. The repeated coin's news could still appear in that message.
+- If the history cannot be read, nothing is blocked. The other choice, blocking every alert on a Sheet outage, would silence real alerts.
+- Ten offline tests cover it. Disabling the guard, changing "all coins" to "any coin" and removing the history fetch were each caught by a test.
+- Not done: the real-AI scenarios were not re-run (they cost tokens and the daily cap is used up today). The change has not run on live data.

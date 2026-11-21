@@ -1120,6 +1120,19 @@ def review_and_revise(draft, evidence):
 # ==============================================================================================
 # 10. GUARDRAILS IN CODE, applied last, after the AI (and the reviewer) have answered
 # ==============================================================================================
+def recently_alerted_coins(evidence):
+    """The coins that the agent's own last HISTORY_LIMIT decisions (read from the Sheet) show as alerted, as a set of upper-case symbols.
+    None when the history is missing or cannot be read: then nothing is known, and the repeat check does not block."""
+    result = last_result(evidence, "get_recent_decisions")
+    if not isinstance(result, dict) or "error" in result or not isinstance(result.get("decisions"), list):
+        return None
+    coins = set()
+    for item in result["decisions"][-HISTORY_LIMIT:]:
+        if isinstance(item, dict) and item.get("alert") is True and isinstance(item.get("coins"), list):
+            coins.update(str(coin).strip().upper() for coin in item["coins"])
+    return coins
+
+
 def apply_guardrails(draft, valid_titles, evidence):
     """Blocks an alert that breaks a rule. The AI cannot talk its way past this function."""
     final = dict(draft, blocked_reason="")
@@ -1139,8 +1152,14 @@ def apply_guardrails(draft, valid_titles, evidence):
             breached = {e["result"].get("coin") for e in evidence
                         if e["tool"] == "get_market_summary" and "error" not in e["result"] and e["result"].get("breaches")}
             without = [coin for coin in draft["coins"] if coin not in breached]
+            repeated = recently_alerted_coins(evidence)
             if without:
                 reason = f"{', '.join(without)}: no price rank at or above the alert rank in the market data (context never alerts alone)"
+            elif repeated is not None and draft["coins"] and all(str(coin).strip().upper() in repeated for coin in draft["coins"]):
+                # The playbook's repeat rule, enforced here because the AI does not always follow it (it once alerted BTC again because
+                # two other metrics were "new"). An alert that holds at least one coin not alerted recently is left to the AI.
+                reason = (f"{', '.join(draft['coins'])}: already alerted within the last {HISTORY_LIMIT} decisions "
+                          "(Repeat alerts rule: no alert again for the same coin)")
     if reason:
         log(f"GUARDRAIL blocked the alert: {reason}")
         final.update(alert=False, coins=[], message="", blocked_reason=reason)
@@ -1158,6 +1177,8 @@ def decide(mode, use_reviewer, tools):
     draft, evidence = run_planner(tools) if mode == "planner" else run_agent_loop(tools)
     if use_reviewer:
         draft = review_and_revise(draft, evidence)
+    if draft["alert"] and last_result(evidence, "get_recent_decisions") is None:
+        run_tool(tools, "get_recent_decisions", {}, evidence)   # the repeat check must not depend on the AI having asked for the history
     titles = [section["title"] for section in load_playbook()]
     return apply_guardrails(draft, titles, evidence), evidence
 

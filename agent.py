@@ -1166,6 +1166,38 @@ def apply_guardrails(draft, valid_titles, evidence):
     return final
 
 
+def market_summaries(evidence):
+    """The get_market_summary results of this run that are real summaries (not errors, not odd types)."""
+    return [e["result"] for e in evidence
+            if e["tool"] == "get_market_summary" and isinstance(e["result"], dict) and "error" not in e["result"]]
+
+
+def code_breached_coins(evidence):
+    """The coins that the code's own rank check puts at the alert rank in this run's market summaries, as a sorted list.
+    It reads the 'breaches' list that add_breaches wrote, the same data the per-coin rule in apply_guardrails uses. No rank is recomputed here."""
+    return sorted({s["coin"] for s in market_summaries(evidence) if s.get("breaches") and isinstance(s.get("coin"), str)})
+
+
+def check_for_missed_breach(draft, evidence):
+    """Compares the AI's answer with the evidence and returns (code_breaches, check). It only reports: one ::warning:: line when a
+    'no alert' answer meets coins at the alert rank, or when the run gathered no market data to check against. It never changes the decision.
+    A coin that the last HISTORY_LIMIT decisions already alerted is not a miss when the history is in the evidence (the repeat rule)."""
+    breached = code_breached_coins(evidence)
+    if not market_summaries(evidence):
+        check = "unverified: no valid market data in this run"
+        log("::warning::no valid market data in this run, so the answer could not be checked against the alert rank.")
+    elif draft["alert"]:
+        extra = [str(coin) for coin in draft["coins"] if coin not in breached]   # apply_guardrails blocks and logs these
+        check = f"mismatch: {', '.join(extra)} alerted but not at the alert rank" if extra else "agrees"
+    else:
+        missed = [coin for coin in breached if coin not in (recently_alerted_coins(evidence) or set())]
+        check = f"mismatch: {', '.join(missed)} at the alert rank, AI said no alert" if missed else "agrees"
+        if missed:
+            log(f"::warning::the AI said no alert, but the code finds {', '.join(missed)} at or above the alert rank ({ALERT_RANK:g}) "
+                "in this run's market data. Check the run before trusting this calm day.")
+    return breached, check
+
+
 # ==============================================================================================
 # 11. PUTTING IT TOGETHER: plan or loop, then reviewer, then guardrails
 # ==============================================================================================
@@ -1180,7 +1212,10 @@ def decide(mode, use_reviewer, tools):
     if draft["alert"] and last_result(evidence, "get_recent_decisions") is None:
         run_tool(tools, "get_recent_decisions", {}, evidence)   # the repeat check must not depend on the AI having asked for the history
     titles = [section["title"] for section in load_playbook()]
-    return apply_guardrails(draft, titles, evidence), evidence
+    final = apply_guardrails(draft, titles, evidence)
+    # Two extra keys for the log line only: deliver() builds the Sheet row from named fields, so they are never saved or emailed.
+    final["code_breaches"], final["check"] = check_for_missed_breach(draft, evidence)
+    return final, evidence
 
 
 def run_live(mode, use_reviewer, dry_run):

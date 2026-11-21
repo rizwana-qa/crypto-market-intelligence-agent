@@ -142,7 +142,7 @@ class Answers(unittest.TestCase):
         out = rag.ask(NEAR, INDEX, llm=llm)
         self.assertEqual(out["kind"], "answer")
         self.assertTrue(out["used_ai"])
-        self.assertEqual((out["guardrails"]["passed"], out["guardrails"]["total"]), (3, 3))
+        self.assertEqual((out["guardrails"]["passed"], out["guardrails"]["total"]), (4, 4))
         self.assertEqual([w["section"] for w in out["why"]], ["Alert rules"])
         self.assertIn("Alert rules", [e["title"] for e in out["evidence"]])
         self.assertEqual(len(llm.calls), 1)
@@ -164,7 +164,7 @@ class Answers(unittest.TestCase):
                               {"text": "Near threshold is a rank from 90 up to, but not including, 95.", "section": "Alert rules"}])
         out = rag.ask(NEAR, INDEX, llm=fake(data))
         self.assertEqual([w["section"] for w in out["why"]], ["Alert rules"])
-        self.assertEqual(out["guardrails"]["passed"], 2)
+        self.assertEqual(out["guardrails"]["passed"], 3)
         self.assertFalse(out["guardrails"]["checks"][0]["passed"])
 
     def test_a_real_section_that_was_not_retrieved_is_dropped(self):
@@ -198,7 +198,7 @@ class Answers(unittest.TestCase):
                          "section": "Wording rules"}]}
         out = rag.ask(WORDS, INDEX, llm=fake(data))
         self.assertEqual(out["kind"], "answer")
-        self.assertEqual(out["guardrails"]["passed"], 3)
+        self.assertEqual(out["guardrails"]["passed"], 4)
 
     def test_malformed_or_failed_ai_replies_fall_back_to_the_playbook_text(self):
         for reply in ("not json at all", "", "[1, 2, 3]", '{"bottom_line": "x", "why": "none"}'):
@@ -256,8 +256,9 @@ class Answers(unittest.TestCase):
         self.assertLessEqual(len(out["question"]), rag.MAX_QUESTION)
 
     def test_the_answer_is_capped_in_length(self):
-        why = [{"text": f"Point {i} about the alert rules.", "section": "Alert rules"} for i in range(9)]
+        why = [{"text": "Near threshold is a rank from 90 up to, but not including, 95.", "section": "Alert rules"} for _ in range(9)]
         out = rag.ask(NEAR, INDEX, llm=fake({"bottom_line": "x" * 900, "why": why}))
+        self.assertEqual(out["kind"], "answer")
         self.assertLessEqual(len(out["bottom_line"]), rag.MAX_BOTTOM_LINE)
         self.assertLessEqual(len(out["why"]), rag.MAX_WHY)
 
@@ -340,7 +341,7 @@ class Server(unittest.TestCase):
         data = json.loads(body)
         self.assertEqual(status, 200)
         self.assertEqual(data["kind"], "answer")
-        self.assertEqual(data["guardrails"]["passed"], 3)
+        self.assertEqual(data["guardrails"]["passed"], 4)
 
     def test_the_key_is_never_in_a_reply(self):
         with mock.patch.dict("os.environ", {"GROQ_API_KEY": "gsk_secret_value_123"}):

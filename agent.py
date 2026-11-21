@@ -107,8 +107,24 @@ def round_clean(value, digits):
 # 2. MARKET TOOL: Kraken data and the numbers. Adapted from Assignment 1 (src/fetch_data.py,
 #    src/analysis.py). Plain arithmetic, no AI.
 # ==============================================================================================
+CANDLE_TOLERANCE = 1e-9   # relative slack when one candle's own prices are compared (floating-point noise only)
+
+
+def as_number(value):
+    """A finite float from a number or numeric text, else None. Booleans, NaN, infinity and words are refused."""
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
 def parse_candles(raw, pair):
-    """Kraken candle rows are [time, open, high, low, close, vwap, volume, count]; time, close and volume are used."""
+    """Kraken candle rows are [time, open, high, low, close, vwap, volume, count]. The agent keeps time, close and volume,
+    but every candle must be sound before any of it is used: positive prices, a high that is the highest and a low that
+    is the lowest of the day, and a whole, non-negative trade count. The vwap is checked by validate_data.py only."""
     candles = []
     for number, row in enumerate(raw):
         if not isinstance(row, list) or len(row) != 8:
@@ -116,24 +132,31 @@ def parse_candles(raw, pair):
         timestamp = row[0]
         if not isinstance(timestamp, int) or isinstance(timestamp, bool):
             raise ValueError(f"{pair}: candle {number} has no integer timestamp")
-        try:
-            close = float(row[4])
-        except (TypeError, ValueError):
+        close = as_number(row[4])
+        if close is None:
             raise ValueError(f"{pair}: candle {number} has a close that is not a number")
-        if not math.isfinite(close) or close <= 0:
+        if close <= 0:
             raise ValueError(f"{pair}: candle {number} has a close that is not a positive number")
-        try:
-            volume = float(row[6])
-        except (TypeError, ValueError):
+        open_, high, low = as_number(row[1]), as_number(row[2]), as_number(row[3])
+        if None in (open_, high, low) or min(open_, high, low) <= 0:
+            raise ValueError(f"{pair}: candle {number} has an open, high or low that is not a positive number")
+        slack = CANDLE_TOLERANCE * high
+        if high + slack < max(open_, close, low) or low - slack > min(open_, close, high):
+            raise ValueError(f"{pair}: candle {number} has a high or low that contradicts its open or close")
+        volume = as_number(row[6])
+        if volume is None:
             raise ValueError(f"{pair}: candle {number} has a volume that is not a number")
-        if not math.isfinite(volume) or volume < 0:
+        if volume < 0:
             raise ValueError(f"{pair}: candle {number} has a volume that is not zero or a positive number")
+        trades = row[7]
+        if not isinstance(trades, int) or isinstance(trades, bool) or trades < 0:
+            raise ValueError(f"{pair}: candle {number} has a trade count that is not a whole number of zero or more")
         candles.append({"timestamp": timestamp, "close": close, "volume": volume})
     return candles
 
 
-def fetch_candles(pair):
-    """Daily candles for one Kraken pair. Any failure is an error, never a guess."""
+def fetch_rows(pair):
+    """The raw daily candle rows Kraken returns for one pair (8 values each). Any failure is an error, never a guess."""
     last_error = "unknown error"
     for attempt in range(1, 4):
         try:
@@ -156,20 +179,30 @@ def fetch_candles(pair):
     keys = [key for key in body["result"] if key != "last"]  # "last" is a pointer, not candles
     if keys != [RESULT_KEYS[pair]]:
         raise RuntimeError(f"{pair}: unexpected pair key {keys}, expected {RESULT_KEYS[pair]!r}")
-    return parse_candles(body["result"][keys[0]], pair)
+    return body["result"][keys[0]]
+
+
+def fetch_candles(pair):
+    """Daily candles for one Kraken pair, checked. Any failure is an error, never a guess."""
+    return parse_candles(fetch_rows(pair), pair)
 
 
 def completed_closes(candles, now):
     """(timestamps, closes) of the completed UTC days. The unfinished day of today is dropped."""
     today = int(now.timestamp()) // SECONDS_PER_DAY * SECONDS_PER_DAY
+    every = [c["timestamp"] for c in candles]     # all candles, the unfinished one of today included
+    if any(t > int(now.timestamp()) for t in every):
+        raise ValueError("a candle is dated in the future")
+    if any(t % SECONDS_PER_DAY for t in every):
+        raise ValueError("a candle does not start at midnight UTC")
+    if any(b <= a for a, b in zip(every, every[1:])):
+        raise ValueError("the daily data has a duplicate or is out of order")
     done = [c for c in candles if c["timestamp"] < today]
     stamps = [c["timestamp"] for c in done]
     if len(done) < MIN_HISTORY_DAYS:
         raise ValueError(f"only {len(done)} completed candles, need at least {MIN_HISTORY_DAYS}")
-    if any(t % SECONDS_PER_DAY for t in stamps):
-        raise ValueError("a candle does not start at midnight UTC")
     if any(b - a != SECONDS_PER_DAY for a, b in zip(stamps, stamps[1:])):
-        raise ValueError("the daily data has a gap, a duplicate or is out of order")
+        raise ValueError("the daily data has a gap")
     if stamps[-1] != today - SECONDS_PER_DAY:
         raise ValueError(f"stale data: the latest completed candle is {format_date(stamps[-1])}")
     return stamps, [c["close"] for c in done]
@@ -317,8 +350,12 @@ def tool_market_summary(coin):
 
 # ---- cross-asset context: relative strength and correlation between the coins.
 def align_series(series_by_coin):
-    """{coin: (stamps, closes)} -> (common stamps, {coin: closes}) on the days every coin has."""
-    common = sorted(set.intersection(*(set(stamps) for stamps, _ in series_by_coin.values())))
+    """{coin: (stamps, closes)} -> (common stamps, {coin: closes}) on the days every coin has.
+    Every coin must end on the same day: a coin that is a day behind would be compared with the others on the wrong dates."""
+    ends = {coin: stamps[-1] for coin, (stamps, _) in series_by_coin.items()}
+    if len(set(ends.values())) > 1:
+        raise ValueError("the coins end on different days: " + ", ".join(f"{coin} {format_date(end)}" for coin, end in ends.items()))
+    common =sorted(set.intersection(*(set(stamps) for stamps, _ in series_by_coin.values())))
     if len(common) < MIN_HISTORY_DAYS:
         raise ValueError(f"only {len(common)} days in common, need at least {MIN_HISTORY_DAYS}")
     lookup = {coin: dict(zip(stamps, closes)) for coin, (stamps, closes) in series_by_coin.items()}

@@ -2,9 +2,13 @@
 
 Densight Labs AI Masterclass, Assignments 2 and 3: Build a Crypto Watch Agent.
 
-**This project is for education only and is not financial advice.**
+**Live market-data analysis and decision support for BTC, ETH and XRP. Not investment advice: the agent places no orders and never tells anyone to buy or sell.**
 
-## Question and watchlist
+A daily market-intelligence agent for BTC/USD, ETH/USD and XRP/USD. It reads the latest completed daily candle from Kraken, ranks every measure against the coin's own history, adds market context from five more free sources, and decides whether anything deserves an alert. The AI recommends. Code validates the data, calculates every number, and has the last word.
+
+Contents: [Question and coverage](#question-and-coverage) | [Data sources](#data-sources-at-a-glance) | [How it works](#how-it-works) | [Data fetched and saved](#data-fetched-and-saved) | [Data validation](#data-validation) | [Fetch-data scenarios](#fetch-data-scenarios-and-traceability) | [Alert rule and thresholds](#alert-rule-and-thresholds) | [Guardrails](#guardrails) | [Testing](#testing) | [Verification status](#verification-status) | [Token budget](#token-budget-for-scenario-runs) | [Results and conclusion](#results-and-conclusion) | [Executive brief](#executive-intelligence-brief) | [Run it](#run-it-from-a-fresh-clone) | [Files](#files) | [Evidence still to attach](#evidence-still-to-attach-before-submission)
+
+## Question and coverage
 
 **Monitoring question**
 
@@ -14,28 +18,29 @@ Densight Labs AI Masterclass, Assignments 2 and 3: Build a Crypto Watch Agent.
 
 > Is BTC, ETH or XRP showing unusual volatility, distance from its 30-day average or drawdown in its latest completed daily candle compared with its own history, and is the data reliable enough to say so?
 
-**Coverage of the monitoring question today.** This table says what the code does, so the question is not claimed to be answered more than it is. Only the first three price measures can raise an alert. Everything else is described as context and never alerts on its own (a guardrail in code, see below).
+**Coverage.** Only the first three price measures can raise an alert. Everything else is context and never alerts on its own (a guardrail in code).
 
 | Part of the question | Status | How |
 |---|---|---|
-| What has changed in the latest completed daily data | Implemented | Latest completed candle only (today's unfinished candle is dropped): last close, daily return, the price metrics and the context metrics. No day-over-day comparison of ranks |
+| What has changed in the latest completed daily data | Implemented | Latest completed candle only (today's unfinished candle is dropped): last close, daily return, the price metrics and the context metrics. Ranks are not compared day over day |
 | Unusual compared with each asset's own history | Implemented | Each metric is ranked (percentile, 0 to 100) against that coin's own history, up to about 700 days |
-| Trends | Implemented as context | Label `up`, `down` or `mixed` from the 30- and 60-day changes and the close against its 30-day average. Also the distance from the 30-day average, which is an alert metric |
-| Volatility | Implemented | 30-day daily volatility (sample standard deviation of 30 daily returns) |
-| Volume | Implemented as context | Today's Kraken volume divided by the mean of the previous 30 days, ranked against that ratio's own history. It is Kraken volume in the coin, not market-wide volume |
+| Volatility | Implemented, can alert | 30-day daily volatility (sample standard deviation of 30 daily returns) |
+| Distance from the 30-day average, drawdown | Implemented, can alert | Close against its 30-day average; fall from the 30-day high |
+| Trends | Implemented as context | Label `up`, `down` or `mixed` from the 30- and 60-day changes and the close against its 30-day average |
+| Volume | Implemented as context | Today's Kraken volume divided by the mean of the previous 30 days, ranked against that ratio's own history. Kraken volume in the coin, not market-wide volume |
 | Relative strength | Implemented as context | A coin's 30-day return minus the group mean, ranked against its own history (unusual at either end) |
-| Cross-asset relationships | Implemented as context | Rolling 30-day correlation of daily returns for each pair, ranked against the pair's own history (tool `get_cross_asset_summary`) |
-| Liquidity | Implemented as context (new, free source) | Spread and order-book depth within 1% of the mid price (or the narrower range both sides of the book cover, which is reported), from Kraken's public order book (tool `get_market_context`) |
-| Derivatives positioning | Implemented as description only | Funding rate (who pays whom) and open interest of the perpetual futures contract, from Kraken Futures. Never flagged and never an alert, because there is no stored history to rank against |
+| Cross-asset relationships | Implemented as context | Rolling 30-day correlation of daily returns for each pair, ranked against the pair's own history |
+| Liquidity | Implemented as context | Spread and order-book depth within 1% of the mid price (or the narrower range both sides of the book cover, which is reported), from Kraken's order book |
+| Derivatives positioning | Description only | Funding rate (who pays whom) and open interest of the perpetual futures contract, from Kraken Futures. Never flagged, because there is no stored history to rank against |
 | Implied volatility | Implemented as context for BTC and ETH | Deribit's DVOL index, ranked against the past year. XRP has no such index and is reported as unavailable |
-| Market-wide volume and a second price | Implemented as context, needs the free CoinGecko Demo key | 24-hour volume across exchanges against its 30-day average, ranked against its own history, and a price cross-check against Kraken's mid price. Without the key these fields say "not configured" |
-| Market sentiment | Implemented as context | The Fear and Greed Index (alternative.me), one value for the whole market |
-| Forward scenarios | Conditional watch scenarios, not predictions | The brief lists conditions that can be observed (stress persists, back to normal, a new breach), what the agent does in each, and what would invalidate it. No probability, no price forecast, no advice |
-| Uncertainty levels | Implemented as stated limits | Ranks show how unusual a value is. The brief also shows how often each coin reached the alert rank in its own history, and the approximations in the trigger levels. No confidence intervals |
-| Risk flags | Implemented | Alert (rank 95 or higher), near threshold (90 to below 95), unusual volume, relative strength or correlation (context), and data unavailable |
+| Market-wide volume and a second price | Implemented as context, needs the free CoinGecko Demo key | 24-hour volume across exchanges against its 30-day average, ranked against its own year, and a price cross-check against Kraken's mid price. Without the key these fields say "not configured" |
+| Market sentiment | Implemented as context | Fear and Greed Index (alternative.me), one value for the whole market |
+| Forward scenarios | Conditional watch scenarios, not predictions | Observable conditions (stress persists, back to normal, a new breach), what the agent does in each, and what would invalidate it. No probability, no price forecast, no advice |
+| Uncertainty levels | Stated limits | Ranks show how unusual a value is. The brief also shows how often each coin reached the alert rank in its own history and the approximations in the trigger levels. No confidence intervals |
+| Risk flags | Implemented | Alert (rank 95 or higher), near threshold (90 to below 95), unusual volume, relative strength or correlation (context), data unavailable |
 | Invalidation conditions | Implemented for the watch scenarios | Each scenario states what would show it no longer applies, such as a rank falling below 90 or an invalid candle |
 
-Three limits stay. The agent makes no forecast and gives no advice, by design: the project is for education only, and the playbook and the code forbid both. Trigger levels in the brief are closed-form values worked out from the coin's own history, not targets. Trend, volume, relative strength, correlation and the new market context have no backtest of their own yet. The new context sources have only been tested offline on sample replies so far (see "Free data sources for market context").
+Three limits stay. The agent makes no forecast and gives no advice, by design: the playbook and the code forbid both. Trigger levels in the brief are closed-form values worked out from the coin's own history, not targets. Trend, volume, relative strength, correlation and the market context have no backtest of their own.
 
 | Coin | Kraken pair | Kraken result key |
 |---|---|---|
@@ -43,62 +48,65 @@ Three limits stay. The agent makes no forecast and gives no advice, by design: t
 | Ethereum (ETH) | `ETHUSD` | `XETHZUSD` |
 | XRP | `XRPUSD` | `XXRPZUSD` |
 
-### Kraken API used for the data
+The result keys were confirmed against Kraken's `GET /0/public/AssetPairs` endpoint (`XRPUSD` is stored under `XXRPZUSD`).
 
-- **Endpoint:** `GET https://api.kraken.com/0/public/OHLC` (Kraken REST API, "Get OHLC Data"), with `pair` set to `XBTUSD`, `ETHUSD` or `XRPUSD` and `interval=1440` for daily candles. It is a public endpoint: no API key and no account are needed.
-- **Each candle:** `[time, open, high, low, close, vwap, volume, count]`. The agent uses `time`, `close` and `volume`.
-- **Depth:** Kraken returns up to 720 of the most recent candles, which is why the history used for ranking is about 700 days.
-- **Unfinished candle:** the last entry in the reply is the current, not-yet-committed day. The agent drops it, so every number is from a completed UTC day.
-- **Checks in code:** the reply must contain exactly the expected result key (`XXBTZUSD`, `XETHZUSD` or `XXRPZUSD`), every row must be 8 values with a positive close, the days must be consecutive with no gap, and the latest completed candle must be yesterday. Anything else is an error, never a guess. A failed request is tried up to 3 times.
-- **Pair names:** the result keys were confirmed against Kraken's `GET /0/public/AssetPairs` endpoint (`XRPUSD` is stored under `XXRPZUSD`).
-- **Documentation:** [Get OHLC Data](https://docs.kraken.com/api/docs/rest-api/get-ohlc-data) and [Historical data](https://docs.kraken.com/exchange/guides/general/historical-data).
+## Data sources at a glance
 
-### New APIs in this version and what each one is for
+Six free public APIs. No paid plan and no paid key is needed anywhere. The only key is CoinGecko's free Demo key, stored as the GitHub secret `COINGECKO_API_KEY`. Without it the CoinGecko fields say "not configured", the validation cross-check says SKIP, and everything else still works.
 
-The first version used one API, Kraken OHLC (daily candles). This version adds five free sources. Each answers one question the daily brief could not answer before. All of them are context only: none of them can raise an alert by itself, and the agent is told to say "unavailable" when one is down.
+| # | API | Endpoint | Key | Role | What it answers | Shows up as |
+|---|---|---|---|---|---|---|
+| 1 | **Kraken OHLC** | `GET /0/public/OHLC`, `interval=1440` | none | **Core. The only source that can raise an alert** | How unusual is today's volatility, distance from the average and drawdown for this coin? | `get_market_summary`, `get_cross_asset_summary`, `market_data`, `cross_asset` |
+| 2 | Kraken Depth | `GET /0/public/Depth`, 500 levels | none | Context | Could a normal-size order move the price? | "Liquidity" |
+| 3 | Kraken Futures | `GET /derivatives/api/v3/tickers` | none | Context | Are traders crowded on one side? Funding rate, who pays, open interest | "Funding and open interest" |
+| 4 | Deribit DVOL | `public/get_volatility_index_data` | none | Context | Is the options market pricing in unusual moves? (BTC and ETH only) | "Implied volatility" |
+| 5 | **CoinGecko Demo** | `/coins/markets`, `/coins/{id}/market_chart` | free Demo key | Context and independent validation | Is the whole market busy or quiet? Do two independent sources agree on the price? | "Market-wide volume", "Price check", and the `coingecko_agreement` check of the data validation |
+| 6 | alternative.me Fear and Greed | `GET /fng/` | none | Context | Is market sentiment extreme? | "Fear and greed" |
 
-| New API | Cost | Question it answers for a market adviser | Where it shows up |
-|---|---|---|---|
-| Kraken order book (`/0/public/Depth`) | free, no key | Could a normal-size order move the price? Spread and depth near the price show how thin or deep the market is. | "Liquidity" in the brief |
-| Kraken Futures tickers (`/derivatives/api/v3/tickers`) | free, no key | Are traders crowded on one side? Funding rate (and who pays it) and open interest show leverage building up, which often comes before sharp moves. | "Funding and open interest" |
-| Deribit DVOL (`public/get_volatility_index_data`) | free, no key | Is the options market pricing in unusual moves? Implied volatility and its one-year rank (BTC and ETH only; Deribit has no XRP index). | "Implied volatility" |
-| CoinGecko Demo (`/coins/markets`, `/coins/{id}/market_chart`) | free Demo key, GitHub secret `COINGECKO_API_KEY` | Is the whole market busy or quiet (24-hour volume rank against the past year)? Do two independent price sources agree? | "Market-wide volume" and "Price check" |
-| alternative.me Fear and Greed (`/fng/`) | free, no key | Is market sentiment extreme? | "Fear and greed" |
+Two agent tools sit on top of them. `get_market_context` calls sources 2 to 6. `get_alert_history_stats` is not an API: it reads the Sheet history to say how often each coin has reached the alert rank before, so the agent can tell a rare event from a routine one.
 
-Two agent tools were added with them. `get_market_context` calls the five sources. `get_alert_history_stats` is not an API: it reads the Sheet history to say how often each coin has reached the alert rank before, so the agent can tell a rare event from a routine one. The details, limits and live check of each source follow.
+### CoinGecko: what it is used for
 
-### Free data sources for market context
+CoinGecko is the one source with three separate jobs, and it is optional. All three are context or quality checks. None can raise an alert.
 
-Only free public sources are used. No paid plan and no paid key is needed anywhere. The one optional key is CoinGecko's free Demo key, stored as the GitHub secret `COINGECKO_API_KEY`. Without it the CoinGecko fields say "not configured" and everything else still works.
+| # | Use | Endpoint | What is compared or ranked | Rule |
+|---|---|---|---|---|
+| 1 | **Market-wide volume rank** (agent tool `get_market_context`) | `/coins/markets` (one call for all three coins) and `/coins/{id}/market_chart?days=365` (one per coin) | 24-hour volume across exchanges against the mean of the previous 30 daily volumes, ranked against that ratio's own year | Rank 95 or higher is flagged as context only |
+| 2 | **Price cross-check** (agent tool `get_market_context`) | `/coins/markets` | CoinGecko's price against Kraken's mid price | A gap above 1% is flagged. It never blocks an alert, because aggregated prices lag in fast markets |
+| 3 | **Independent validation of the Kraken closes** (`validate_data.py`) | `/coins/{id}/market_chart?days=365` | The latest 14 completed Kraken closes against CoinGecko's 00:00 UTC point of the following day (the same moment, two unrelated sources) | Up to 1% apart: PASS. Above 1%: WARN. Above 3%: FAIL |
 
-| Source | What it gives | Key | Used for |
-|---|---|---|---|
-| Kraken order book, `GET /0/public/Depth` | Bids and asks, up to 500 levels each side | none | Spread and depth around the mid price (band of 1%, or narrower when the fetched book does not reach 1%; both sides use the same band) |
-| Kraken Futures, `GET /derivatives/api/v3/tickers` | Perpetual contracts: funding rate, open interest, mark price | none | Funding rate and who pays it, open interest |
-| Deribit, `public/get_volatility_index_data` | DVOL, an implied volatility index, for BTC and ETH (one year of daily values) | none | Implied volatility and its rank over the past year |
-| CoinGecko, `/coins/markets` and `/coins/{id}/market_chart` | Price, 24-hour volume, a year of daily volumes | free Demo key, header `x-cg-demo-api-key` | Market-wide volume ratio and rank, price cross-check |
-| alternative.me, `/fng/` | Fear and Greed Index, 0 to 100 | none | Market-wide sentiment |
+Why a second source: every alert rests on Kraken. An error that is specific to Kraken (a wrong pair, a wrong unit, a corrupted close) shows up as a gap against an aggregate of many exchanges. Small gaps of 0.1% to 0.3% are normal because the two sources are built differently, so the thresholds are conventions, not rules of either provider.
 
-- **Fail-soft.** Every source is read by `sources.py`, which never raises. A source that is down, slow, rate limited or returns something unexpected becomes `{"unavailable": "<short reason>"}` for that field only. The agent is told to say "unavailable" and never to estimate it. The error text never contains a URL, a header or a key (`test_an_error_never_contains_the_url_or_the_key`).
-- **Context only.** None of this can raise an alert. Funding, open interest and liquidity have no stored history, so they are described and never flagged. Implied volatility rank and market-wide volume rank reuse the alert rank of 95, and the sentiment index is flagged as extreme at 24 or lower and 76 or higher (own convention). The price cross-check flags a gap above 1% between Kraken and CoinGecko, and it never blocks an alert, because aggregated prices lag in fast markets.
-- **Attribution.** CoinGecko and alternative.me ask for attribution. The brief's footer carries it, with links.
-- **Limits.** CoinGecko's Demo plan has a monthly call cap and a per-minute limit (each run makes 4 CoinGecko calls: one markets call and one volume history per coin, and both the daily run and the brief make them, so about 8 a day, far below the Demo plan's monthly cap). The sources can change their format or limits at any time, which is why each one has its own check in `python agent.py --check-sources` and in the manual `Data sources check` workflow.
-- **Verification status.** Verified offline: every parser against sample replies written to the providers' documented shapes, the fail-soft paths, the rank maths against the agent's own, and the Sheet row width. **Verified live on 2026-11-21** with the manual `Data sources check` workflow ([run 44842220066](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44842220066), 0 required sources failed, using the free CoinGecko Demo key): all five sources answered for all three coins. What the run settled: Kraken's `relativeFundingRate` is the absolute `fundingRate` divided by the mark price (BTC 0.6995 / 58,930 = 1.187e-5 against 1.189e-5; ETH and XRP agree the same way), so it is a fraction of the price, and Kraken's support pages describe funding as set for a 1-hour period, so the code reports it as percent per hour. Open interest is in coins for the linear `PF_` contracts (BTC 2,339 coins is about $138M, plausible for Kraken Futures). The XRP contract is `PF_XRPUSD`. CoinGecko's id for XRP is `ripple` (its market chart answered). Today's partial day is dropped, so the latest volume day used is yesterday's stamp, and CoinGecko stamps its daily points at 00:00 UTC, so treat `as_of` as accurate to about one day. The live run also found a flaw that the sample replies could not show: Kraken's default 100 order-book levels did not reach 1% from the price for any coin, so the depth was labelled "within 1%" but covered less. The code now fetches up to 500 levels, uses one band for both sides (1% or the narrower range the book covers) and reports it. Re-run live after that fix ([run 44842558674](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44842558674)): the band is the full 1% for all three coins, so bid and ask depth are comparable. The real AI has been run against the new tools only on fake scenario data (scenarios 9 and 17 to 20, see Results). The agent has not yet run end to end on live data with the new tools. That happens on the first daily run after the pull request is merged.
-- **Documentation:** [Kraken Depth](https://docs.kraken.com/api/docs/rest-api/get-order-book), [Kraken Futures tickers](https://docs.kraken.com/api/docs/futures-api/trading/get-tickers), [Deribit volatility index](https://docs.deribit.com/api-reference/market-data/public-get_volatility_index_data), [CoinGecko API](https://docs.coingecko.com/), [Fear and Greed API](https://alternative.me/crypto/api/).
+Call volume: each daily run makes 4 CoinGecko calls (one markets call and one volume history per coin), the executive brief makes 4 more, and a manual validation makes 3. That is about 8 a day, far below the Demo plan's monthly cap. CoinGecko and alternative.me ask for attribution, and the brief's footer carries it with links.
+
+### Rules that apply to every source
+
+- **Fail-soft.** Every free source is read by `sources.py`, which never raises. A source that is down, slow, rate limited or returns something unexpected becomes `{"unavailable": "<short reason>"}` for that field only. The agent says "unavailable" and never estimates the value. An error text never contains a URL, a header or a key (`test_an_error_never_contains_the_url_or_the_key`).
+- **Context only.** Funding, open interest and liquidity have no stored history, so they are described and never flagged. Implied volatility rank and market-wide volume rank reuse the alert rank of 95. The sentiment index is flagged as extreme at 24 or lower and 76 or higher (own convention).
+- **Formats change.** Each source has its own check in `python agent.py --check-sources` and in the manual `Data sources check` workflow.
+- **What the live check settled** (run [44842220066](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44842220066), all five context sources answered for all three coins): Kraken's `relativeFundingRate` is the absolute `fundingRate` divided by the mark price, so it is a fraction of the price, and the code reports it as percent per hour. Open interest is in coins for the linear `PF_` contracts. The XRP contract is `PF_XRPUSD`. CoinGecko's id for XRP is `ripple`. CoinGecko stamps its daily points at 00:00 UTC, so `as_of` is accurate to about one day. The run also found a flaw the sample replies could not show: Kraken's default 100 order-book levels did not reach 1% from the price for any coin, so "depth within 1%" covered less than it said. The code now fetches 500 levels, uses one band for both sides (1%, or the narrower range the book covers) and reports it. The re-run ([44842558674](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44842558674)) shows the full 1% band for all three coins.
+- **Documentation:** [Kraken OHLC](https://docs.kraken.com/api/docs/rest-api/get-ohlc-data), [Kraken Depth](https://docs.kraken.com/api/docs/rest-api/get-order-book), [Kraken Futures tickers](https://docs.kraken.com/api/docs/futures-api/trading/get-tickers), [Deribit volatility index](https://docs.deribit.com/api-reference/market-data/public-get_volatility_index_data), [CoinGecko API](https://docs.coingecko.com/), [Fear and Greed API](https://alternative.me/crypto/api/).
+
+### Kraken OHLC, the core source
+
+- **Request:** `GET https://api.kraken.com/0/public/OHLC` with `pair` set to `XBTUSD`, `ETHUSD` or `XRPUSD` and `interval=1440`. Public endpoint, no key, no account.
+- **Each candle:** `[time, open, high, low, close, vwap, volume, count]`. The agent's alert rule reads `time` and `close`, and uses `volume` as context. Its data gate checks `open`, `high`, `low` and `count` too, and `market_features.csv` turns all eight values into 87 analysis columns (see [Data fetched and saved](#data-fetched-and-saved)). The data validation checks all eight.
+- **Depth:** Kraken returns up to 720 recent candles, which is why the history used for ranking is about 700 days.
+- **Unfinished candle:** the last entry is the current, not-yet-committed day. The agent drops it, so every number comes from a completed UTC day.
+- **Checks in code (agent):** the reply must contain exactly the expected result key. Every row must have 8 values. The time must be a whole number that starts a UTC day, is not in the future and is later than the day before (no duplicate, no out-of-order candle, today's unfinished candle included). The close, open, high and low must be positive, finite numbers, with the high at least as large as the open, close and low and the low at most as small as the open, close and high. The volume must be zero or more and the trade count a whole number of zero or more. The completed days must be consecutive, at least 90 of them, ending yesterday, and the three coins must end on the same day. Anything else is an error, never a guess. A failed request is tried up to 3 times. The vwap is read by the audit only. The separate, stricter audit is described under [Data validation](#data-validation), and every rule above has a scenario in [Fetch-data scenarios](#fetch-data-scenarios-and-traceability).
+- **Status of this gate:** the stricter rules are new in this branch. They are tested offline (45 scenarios for each coin). On live data, `parse_candles` and `completed_closes` accepted all 2,163 candles of the three coins in the Data sources check run [44852768752](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44852768752), and the validation in the same run found nothing to refuse. The same-day rule between the coins (`align_series`) first runs inside the agent at the next daily run.
 
 ## How it works
 
-Each day the agent looks at three coins and decides whether anything deserves an alert.
-
 **What the AI does.** It chooses which tools to call, reads their results, searches `playbook.md` for the rule that applies, and writes a draft decision as JSON: `alert`, `coins`, `message`, `sources`, `reasoning`. It only recommends.
 
-**What the code does.** It fetches and validates the Kraken data, calculates every number, ranks each number against the coin's own history, runs every tool, checks the AI's answer, blocks anything that breaks a rule, writes the Sheet row and triggers the email. The AI never fetches data and never runs a tool.
+**What the code does.** It fetches and validates the data, calculates every number, ranks each number against the coin's own history, runs every tool, checks the AI's answer, blocks anything that breaks a rule, writes the Sheet rows and triggers the email. The AI never fetches data and never runs a tool by itself.
 
 ```
-Kraken -> market tool, cross-asset tool (code) --\
-Free sources -> market context tool (code) ------\
-Sheet  -> memory tool (code) ---------------------> AI (Groq) -> draft JSON -> [reviewer] -> GUARDRAILS (code) -> Sheet row + email
-playbook.md -> search tool (code) ---------------/
+Kraken OHLC -> market tool, cross-asset tool (code) --\
+Free sources -> market context tool (code) -----------\
+Sheet  -> memory tools (code) -------------------------> AI (Groq) -> draft JSON -> [reviewer] -> GUARDRAILS (code) -> Sheet rows + email
+playbook.md -> search tool (code) --------------------/
 ```
 
 ### The six tools
@@ -109,28 +117,28 @@ playbook.md -> search tool (code) ---------------/
 | `get_cross_asset_summary()` | Relative strength and pairwise correlation, each ranked, and the flags | Context only |
 | `get_market_context()` | Liquidity, funding rate and open interest, implied volatility, market-wide volume, a second price, the fear and greed index, and the flags. Any field may say "unavailable" | Context only |
 | `get_alert_history_stats()` | How often each coin was at the alert rank in its own history: days ranked, alert days, share, episodes, latest alert day | Context only |
-| `get_recent_decisions()` | The last 7 saved decisions from the Sheet (to avoid repeat alerts) | No |
+| `get_recent_decisions()` | The last 7 saved decisions from the Sheet, to avoid repeat alerts | No |
 | `search_playbook(query)` | The matching playbook sections, for the rules and the wording | No |
 
-**Model.** The AI is `openai/gpt-oss-120b` on Groq (set by `MODEL` in `agent.py`, or the `GROQ_MODEL` variable). The first choice, `llama-3.3-70b-versatile`, was shut down by Groq on 16 August 2026, so the first live run failed with `model_not_found`. The free Groq tier allows 8,000 tokens per minute and 200,000 per day, so the agent waits and retries when it is rate limited.
+**Model.** `openai/gpt-oss-120b` on Groq (`MODEL` in `agent.py`, or the `GROQ_MODEL` variable). The first choice, `llama-3.3-70b-versatile`, was shut down by Groq on 16 August 2026, so the first live run failed with `model_not_found`. The free Groq tier allows 8,000 tokens per minute and 200,000 per day, so the agent waits and retries when it is rate limited.
 
-## The four versions and the loop behind them
+### The four versions
 
-Four versions can be run from the same code: **Agent loop**, **Agent loop + reviewer**, **Planner** and **Planner + reviewer**. Choose with `--mode agent|planner` and `--reviewer off|on`. The daily workflow runs the Agent loop with the reviewer off. In every version the AI only recommends, and the code has the last word.
+Four versions run from the same code: **Agent loop**, **Agent loop + reviewer**, **Planner** and **Planner + reviewer**. Choose with `--mode agent|planner` and `--reviewer off|on`. The daily workflow runs the Agent loop with the reviewer off. In every version the AI only recommends, and the code has the last word.
 
-### Agent loop (daily version)
+**Agent loop (daily version)**
 
 ```mermaid
 flowchart LR
     A[AI picks a tool] --> B[Code validates the call and runs it]
     B --> C{Enough evidence?}
-    C -- no, at most 8 AI calls --> A
+    C -- no, at most 12 AI calls --> A
     C -- yes --> D[AI writes the draft JSON]
     D --> G[Code guardrails]
-    G --> O[Sheet row and email]
+    G --> O[Sheet rows and email]
 ```
 
-### Planner
+**Planner**
 
 ```mermaid
 flowchart LR
@@ -139,10 +147,10 @@ flowchart LR
     V -- valid --> R[Code runs every step, in order]
     R --> D[AI decides from the evidence]
     D --> G[Code guardrails]
-    G --> O[Sheet row and email]
+    G --> O[Sheet rows and email]
 ```
 
-### Planner + reviewer (the plan, decide and review loop)
+**Planner + reviewer**
 
 ```mermaid
 flowchart LR
@@ -156,50 +164,222 @@ flowchart LR
     Q -- yes --> G[Code guardrails]
     Q -- no, one revision --> D2[AI revises the draft once]
     D2 --> G
-    G --> O[Sheet row and email]
+    G --> O[Sheet rows and email]
 ```
 
-How this differs from a generic "plan, act, reflect" loop, so the diagram is not read as more than the code does:
+What the diagrams do and do not mean:
 
-- **Plan limit.** A plan may have at most `MAX_PLAN_STEPS = 12` steps, not 4. The plan prompt requires one market step for each of the three coins, one cross-asset step, one market-context step, one alert-history-stats step, one history step and the playbook searches, so a complete plan has at least 8. The agent loop's own limit is `MAX_STEPS = 12` AI calls (a call can contain several tool calls). The code enforces the maximum, the allowed tools, the watchlist coins, the exact keys (`tool`, `args`, `reason`) and a non-empty reason. It does not enforce which steps a plan contains, so a plan can omit a rule search (see the results below).
-- **One review, one revision.** The reviewer reads the draft once. If it finds problems, the AI revises once (`MAX_REVISIONS = 1`). The revised draft is not reviewed again. It goes straight to the code guardrails.
-- **The reviewer never blocks the job.** A broken or failed reviewer reply keeps the draft, and the guardrails still apply. The reviewer has two parts: a code check (`unsupported_numbers`) that finds numbers in the draft which appear nowhere in the evidence, and an AI check of the playbook rules, repeat alerts and advice wording.
+- **Limits.** The Agent loop stops with an error after `MAX_STEPS = 12` AI calls (a call can contain several tool calls). A plan may have at most `MAX_PLAN_STEPS = 12` steps. A complete plan needs at least 8: one market step per coin (3), cross-asset, market context, alert-history stats, recent decisions, and at least one playbook search. The code enforces the maximum, the allowed tools, the watchlist coins, the exact keys (`tool`, `args`, `reason`) and a non-empty reason. It does not enforce which steps a plan contains, so a plan can omit a rule search (see Results).
+- **One review, one revision.** The reviewer reads the draft once. If it finds problems, the AI revises once (`MAX_REVISIONS = 1`). The revised draft is not reviewed again and goes straight to the guardrails.
+- **The reviewer never blocks the job.** A broken reviewer reply keeps the draft, and the guardrails still apply. The reviewer has two parts: a code check (`unsupported_numbers`) that finds numbers in the draft which appear nowhere in the evidence, and an AI check of the playbook rules, repeat alerts and advice wording.
 - **Final word.** `apply_guardrails` runs last, in code, in every version. The AI cannot talk its way past it.
 
-## Run it from a fresh clone
+## Data fetched and saved
 
-1. Python 3.12 or newer (the workflows use 3.12; the offline tests were run on 3.13). `git clone <this repo>` and `cd` into it. `pip install -r requirements.txt`
-2. **Google Sheet and Apps Script.**
-   1. Create a Google Sheet. Copy its id (the part of the URL between `/d/` and `/edit`).
-   2. In the Sheet: Extensions > Apps Script. Paste `apps_script/Code.gs`.
-   3. Project Settings > Script properties: add `KEY` (a random string of at least 16 characters) and `SPREADSHEET_ID`. Optionally `EMAIL_TO`.
-   4. Run `authorizeOnce` once in the editor and accept the permissions. It creates the `Agent` tab. The tabs `market_data`, `cross_asset`, `context_data` and `scenarios` are created by the web app the first time the agent writes to them.
-   5. Deploy > New deployment > Web app. Execute as: Me. Who has access: Anyone. Copy the web app URL (it ends in `/exec`).
-   6. After every change to the script: Deploy > Manage deployments > edit > Version: New version > Deploy.
-3. **Keys.** Never put them in a file.
-   - Terminal: `export GROQ_API_KEY=...` and `export SHEET_URL="https://script.google.com/macros/s/.../exec?key=<KEY>"`
-   - GitHub: Settings > Secrets and variables > Actions > add `GROQ_API_KEY` and `SHEET_URL`. Paste them without spaces.
-   - Optional, free: `COINGECKO_API_KEY`, a CoinGecko Demo key (coingecko.com/en/api, no card needed). Without it the market-wide volume and the price cross-check say "not configured".
-4. Check the pairs and calibrate the thresholds: `python calibrate.py`
-5. Run the agent: `python agent.py` (add `--dry-run` to skip the Sheet; `--mode planner --reviewer on` for another version).
-6. Check the free data sources (no AI, no tokens): `python agent.py --check-sources`. In GitHub: Actions > Data sources check > Run workflow.
-7. Run the tests: `python tests/test_guardrails.py -v`, `python tests/test_context.py -v`, `python tests/test_report.py -v` and `python tests/test_sources.py -v` (all offline), and `python agent.py --test` (20 scenarios on fake tools, real AI). `--only 8-20` runs some of them and `--publish` also writes every result to the `scenarios` tab. With the six tools a scenario costs about 23,000 tokens on average (13,600 for a calm one, up to 30,000 when the agent sends an alert), so the 20 scenarios cost about 460,000 tokens. The free tier allows 200,000 a day, so run them in batches of about six over three or four days (see Token budget for scenario runs).
-8. Measure the four versions: `python agent.py --measure` (12 full runs of all 20 scenarios; at about 23,000 tokens a scenario that is more than 5 million tokens, and the planner and reviewer versions use more AI calls than the Agent loop. This needs the paid tier. On the free tier it cannot be done.)
+**1. Fetched from Kraken** (`GET /0/public/OHLC`, daily candles). Kraken sends 8 values per candle. The alert rule uses the time and the close, volume is context, and the other values are checked by the gate and used in `market_features.csv`.
 
-## Playbook thresholds, with reason and source
+| Kraken value | CSV column | Used by the agent? | Meaning |
+|---|---|---|---|
+| time | `time_unix`, `date_utc` | yes | Start of the UTC day |
+| open | `open` | checked only | First trade price of the day |
+| high | `high` | checked only | Highest price of the day |
+| low | `low` | checked only | Lowest price of the day |
+| close | `close` | yes | Last price of the day. Every price metric is built from it |
+| vwap | `vwap` | no (audit only) | Volume-weighted average price |
+| volume | `volume` | yes | Amount traded, in coins (context only) |
+| count | `trades` | checked only | Number of trades |
 
-The full rules are in [`playbook.md`](playbook.md). Every number the agent uses:
+**2. See the data as CSV.** `python export_data.py` (or GitHub: Actions > Data sources check > Run workflow, which prints the files in the log) saves four files in `data_export/`. It calls Kraken with the agent's own code, needs no key and no AI, and writes nothing if any coin fails. `python validate_data.py` adds a fifth file, `data_quality.csv` (see Data validation).
+
+| File | What it holds |
+|---|---|
+| `kraken_candles.csv` | Every daily candle for BTC, ETH and XRP with all 8 Kraken values, about 720 days per coin. Today's unfinished candle is included and marked, because the agent drops it |
+| `daily_factors.csv` | For every completed day: close, volume, daily return, volume against its 30-day average, the three alert metrics (30-day volatility, distance from the 30-day average, 30-day drawdown), the rank of each metric against the coin's own earlier days, and whether any rank reached the alert rank of 95 |
+| `market_features.csv` | The full market picture of every completed day: 87 columns in 11 groups, listed below. Built from the 8 Kraken values only, by `features.py` |
+| `columns_explained.csv` | One line per column of the three files above: where it comes from, what it means and whether the agent uses it |
+
+**`market_features.csv`, the 87 columns.** Nothing here needs another data source. A blank cell means the history is too short for that window, never a guess.
+
+| Group | Columns | What it answers |
+|---|---|---|
+| Identity and Kraken values | 9 | The day, and Kraken's open, high, low, close, vwap, volume and trade count, unchanged |
+| Returns | 8 | 1-day simple and log return, 7, 30, 60 and 90-day change, the gap between yesterday's close and today's open, open to close |
+| Candle shape | 5 | The day's range as a share of the close, how much of the range lies above and below the body (a rejected high or low), where the close sits in the range, the close against the vwap |
+| Volatility | 9 | True range, average true range (14 days), volatility over 7, 30 and 90 days, annualised, short over long, and the Parkinson and Garman-Klass estimators that use the high, low and open |
+| Trend and momentum | 11 | Distance from the 7, 30, 50 and 200-day averages, MACD line, signal and histogram, RSI (14), Bollinger %B and bandwidth, 30-day z-score |
+| Drawdown and range | 8 | Largest fall over 30 and 90 days, distance from the 90 and 365-day highs and the 90-day low, position in the 90-day range, days since the high and the low |
+| Tail risk | 8 | 95% historical value at risk and expected shortfall over 90 days, worst and best day of the last 30, skew, excess kurtosis, downside deviation, share of down days |
+| Volume and liquidity | 8 | Money traded in USD, volume and trade count against their 30-day averages, volume z-score, average trade size, signed volume balance, Amihud illiquidity (price move per USD 1M traded) |
+| Cross-asset | 3 | Correlation and beta to Bitcoin over 30 days, and a coin's 30-day change against the average of the three coins |
+| Own history | 11 | The agent's three alert ranks and `at_alert_rank`, exactly as the agent has them, plus the rank of the range, ATR, 7-day volatility, Parkinson volatility, USD volume, trade count and Amihud value against the coin's own history |
+| Labels | 7 | `vol_regime`, `trend_30_60` (the agent's label), `trend_50_200`, `momentum_state`, `band_state`, `stress_signals` (0 to 6) and `risk_regime` (calm, elevated or stressed) |
+
+How far to trust it. The agent reads 16 of the 87 columns (the identity columns, close, volume, the agent's own return, trend and volume ratio, its three alert metrics and ranks); `columns_explained.csv` marks each one. The other 71 are for analysis. They describe the past and none of them is tested as a forecast. The labels are plain rules on numbers already in the file (for example `risk_regime` counts six stress conditions: three alert ranks and the range rank at 90 or more, volume at twice its average, a close 20% under the 90-day high), so they summarise the data and are not signals. The formulas are checked three ways: 48 offline tests against numbers worked out by hand, a one-off comparison of 133 column checks with pandas, numpy and scipy (largest relative difference 3e-13; the project itself stays on the standard library), and 14 deliberate formula breaks that the tests all caught. A live run ([44852768752](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44852768752)) wrote 2,160 rows of 87 columns (720 days for each coin) with no NaN or infinite cell. In the latest row the only blank cells are the beta and correlation to Bitcoin for BTC itself, and the alert ranks match the numbers already quoted above (BTC 97.0 and 96.6, XRP 96.1 on 2026-11-19).
+
+Live run on 2026-11-21 ([run 44848783647](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44848783647), before `market_features.csv` existed): 721 candles per coin (2,163 rows) and 720 factor rows per coin (2,160 rows). The factors reproduce the numbers the live alert of 2026-11-20 quoted (BTC distance rank 97.0 and drawdown rank 96.6, XRP drawdown rank 96.1, all on 2026-11-19), and the offline test `test_latest_factors_equal_what_the_agent_tells_the_ai` checks that they always equal the agent's own summary. The first rows of each coin have blank factors and ranks, because a rank needs 30 days of returns and 90 days of history.
+
+**3. Saved in the Google Sheet** (`apps_script/Code.gs`, a web app the agent posts to). The Sheet shows the agent's results, not the raw candles: use the CSV for those. A tab is created the first time the agent writes to it, and a failed write to an extra tab prints a warning and never stops the daily run.
+
+| Tab | Written by | One row is | Columns |
+|---|---|---|---|
+| `Agent` | every daily run | the agent's decision after the guardrails. `Coins` lists only the coins named in an alert, so a calm coin is not listed | 9: `Time (UTC)`, `Version`, `Run ID`, `Alert`, `Coins`, `Message`, `Sources`, `Reasoning`, `Blocked reason` |
+| `market_data` | every daily run | one coin on one run: the numbers the agent was given | 24: `Time (UTC)`, `Run ID`, `Version`, `Coin`, `As of (UTC day)`, `Last close (USD)`, `Daily return %`, `Volatility 30d (daily %)`, `Distance from 30d avg %`, `Max drawdown 30d %`, `Rank: volatility`, `Rank: distance`, `Rank: drawdown`, `Alert breaches`, `Trend`, `Change 30d %`, `Change 60d %`, `Volume vs 30d avg (x)`, `Rank: volume`, `Context flags`, `Relative strength vs group %`, `Rank: relative strength`, `History days`, `Status` |
+| `cross_asset` | every daily run | one coin pair on one run | 8: `Time (UTC)`, `Run ID`, `Version`, `As of (UTC day)`, `Pair`, `Correlation 30d`, `Rank`, `Flag` |
+| `context_data` | every daily run | one coin on one run: liquidity, funding, implied volatility, market volume, price check, sentiment, how often the alert rank was reached, and a status (`ok` or `partial: ...`) | 25: `Time (UTC)`, `Run ID`, `Version`, `Coin`, `Kraken mid (USD)`, `Spread %`, `Bid depth in band (USD)`, `Ask depth in band (USD)`, `Depth band % of price`, `Funding rate % per hour`, `Funding pays`, `Open interest (USD, approx)`, `Implied vol % (annualised)`, `Implied vol rank (1y)`, `Market volume 24h (USD)`, `Market volume vs 30d avg (x)`, `Market volume rank`, `CoinGecko price (USD)`, `Price difference %`, `Fear and greed`, `Fear and greed label`, `Alert-rank days %`, `Alert episodes`, `Context flags`, `Status` |
+| `scenarios` | `--test --publish` | one scenario result | 13: `Time (UTC)`, `Run ID`, `Version`, `No.`, `Scenario`, `Result`, `Expected`, `Alert`, `Coins`, `Message`, `Sources`, `Blocked reason`, `AI calls` |
+
+After every change to `Code.gs`: Deploy > Manage deployments > pencil > Version: New version > Deploy. "New deployment" would create a second web app with a different URL.
+
+## Data validation
+
+`validate_data.py` audits the data fetched from Kraken before anyone relies on it. It needs no AI and no tokens, calls Kraken with the agent's own fetch code, and compares the closes with CoinGecko when the free Demo key is set.
+
+```
+python validate_data.py                  # prints PASS / WARN / FAIL per check, writes data_export/data_quality.csv
+python validate_data.py --out DIR        # write the CSV to another folder
+python validate_data.py --no-coingecko   # skip the independent price comparison
+```
+
+In GitHub: Actions > Data sources check > Run workflow. The third step prints the report. The exit code is 1 only when a check is FAIL, so the run turns red only for wrong data. The daily run does not call this script. The agent has its own, narrower checks (see Kraken OHLC above), and this is the stricter audit behind them.
+
+**Status meanings.** PASS: the check found nothing. WARN: unusual but possible, so a person should look (a real crash looks like this). FAIL: the data is wrong and must not be trusted. SKIP: the check could not be made (no key, source down, or an earlier FAIL made it meaningless).
+
+**The 16 checks run for each coin, plus 1 across the coins (49 in total):**
+
+| Group | Check | What it catches |
+|---|---|---|
+| Reply | `kraken_reply` | No answer, an error, or the wrong pair |
+| | `row_shape` | A candle without exactly 8 values (the format changed or the reply was cut off) |
+| Timestamps | `timestamp_valid` | A time that is text, a decimal, a boolean, in milliseconds, before 2013 or in the future |
+| | `timestamp_midnight` | A daily candle that does not start at 00:00:00 UTC (a shifted or timezone-converted time) |
+| | `timestamp_order` | Candles out of order or the same day twice |
+| | `no_missing_days` | A day missing from the series |
+| | `latest_day_is_yesterday` | Stale data: the newest completed candle is older than yesterday (UTC) |
+| | `enough_history` | Fewer than the 90 completed days the agent needs to rank today |
+| Values | `price_values` | An open, high, low, close or vwap that is zero, negative, not a number, NaN or infinite |
+| | `volume_trades_values` | A negative or non-numeric volume; a trade count that is negative, decimal or not a number |
+| | `high_low_consistent` | A high below the open or close, or a low above them |
+| | `vwap_in_range` | A volume-weighted average price outside the day's low to high range |
+| Warnings | `zero_volume_days` | A completed day with no trading at all |
+| | `extreme_daily_moves` | A close more than 30% away from the previous close (a real crash, or a wrong price) |
+| | `open_vs_previous_close` | An open more than 5% away from the previous close (a missing or wrong candle) |
+| Independence | `coingecko_agreement` | Kraken closes that disagree with CoinGecko by more than 1% (WARN) or 3% (FAIL) |
+| Across coins | `coins_same_dates` | BTC, ETH and XRP ending on different days, which would make every cross-asset number compare different days. Reported once, for coin `ALL`; SKIP when fewer than two coins have usable data |
+
+**The thresholds are my conventions, not Kraken's rules:** 30% for a big daily move, 5% for an open far from the previous close, 1% and 3% for the CoinGecko gap, the latest 14 days for the comparison, and 2013-01-01 as the earliest plausible candle. They sit as named constants at the top of `validate_data.py`.
+
+### How it was tested
+
+`tests/test_validate.py` (32 tests, offline) builds clean synthetic candles, injects **43 different faults**, one at a time, and checks two things for each fault: the validator reports the expected check as FAIL or WARN (and nothing else changes), and whether the agent's own checks also refuse the data.
+
+| Outcome | Faults | Which ones |
+|---|---|---|
+| Validator flags it, and the agent's own checks also refuse it | 36 | Timestamps (shifted by an hour, duplicate, wrong order, a missing day, milliseconds, text, a decimal, `true`, before 2013, stale, a candle dated tomorrow, today's unfinished candle twice or out of order), thin history, a row with 7 or 9 values or not a list, no candles, a close that is negative, zero, NaN, infinite, a word, null or `true`, a negative open, a zero high, high below low, close above high, open below low, a negative or word volume, and a trade count that is decimal, negative or `true` |
+| Validator flags it, but the agent carries on | 7 | A vwap that is a word, negative, above the high or below the low; a day with no trading; a 40% jump in one day; an open 10% from the previous close |
+
+Why the second row is left that way. The agent never reads the vwap, so only the validator can see a fault there. The last three are warnings by design: a real market can produce a day with no trading on a thin pair, a crash of 40% or an open far from the last close, and a data check cannot tell those from a wrong price, so it asks a person to look instead of refusing. Before this branch the agent's gate accepted six more of these faults (a negative trade count, high below low, close above high, an unfinished candle duplicated or out of order, a candle dated tomorrow, and a JSON `true` as a close). The new gate refuses all of them, and `test_what_the_agents_own_checks_already_refuse` pins the split.
+
+Other tests in the file cover a clean data set (every check PASS), the CoinGecko comparison (agreement, WARN, FAIL, no data, gaps in the other source), the report layout and CSV, and that every check that runs has a plain-language line in `COVERS`. Breaking the validator on purpose (accepting a candle dated in the future) made 2 tests fail, so the tests can fail.
+
+### Live result
+
+Data sources check on 2026-11-21 ([run 44849463885](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44849463885)): **48 checks, 47 PASS, 1 WARN, 0 FAIL.** The cross-coin check `coins_same_dates` was added after that run, so a run today reports 49. A second run on this branch ([44852768752](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44852768752)) gives **49 checks: 48 PASS, 1 WARN, 0 FAIL**, with `coins_same_dates` PASS (all 3 coins end on 2026-11-20).
+
+| Coin | Candles | Newest completed day | Largest gap to CoinGecko (14 days) | Median gap |
+|---|---|---|---|---|
+| BTC | 721 | 2026-11-20 | -0.11% (2026-11-13) | 0.02% |
+| ETH | 721 | 2026-11-20 | -0.26% (2026-11-13) | 0.02% |
+| XRP | 721 | 2026-11-20 | -0.13% (2026-11-13) | 0.03% |
+
+The one WARN is XRP on 2025-03-02: a daily move of +34.3%, above the 30% limit. It was checked and is a real market event, not a data error. This is why the check is a WARN: a validator cannot tell a crash or a rally from a wrong price.
+
+### What validation does not prove
+
+It proves the data is complete, in the right order, correctly timed, internally consistent and in line with an independent aggregator. It does not prove Kraken's prices are the "true" market price, it cannot see an error that both sources share, and volume has no independent check (only the sign and zero days).
+
+## Fetch-data scenarios and traceability
+
+The path from Kraken's reply to the data the agent trusts has 45 scenarios, FD-01 to FD-45, in `tests/test_fetch_data.py`. FD-01 to FD-12 are the scenarios from the brief, with the same IDs and wording. FD-13 onwards cover the third coin (XRP) and what the brief did not name: HTTP errors, a reply that is not JSON, every other kind of bad time, shape and value, the warnings and the second price source.
+
+Each scenario runs for BTC, ETH and XRP. The coin under test gets the fault, and the other two coins stay clean and must stay clean. Every run goes through the real code: `agent.fetch_rows` with a real HTTP response object, the agent's gate (`parse_candles`, `completed_closes`, `align_series`), and then `validate_data`. The expected outcome is **Reject** (the data is refused by the agent gate, the audit, or both), **Warn** (accepted, and the audit says look) or **Pass** (accepted, nothing reported).
+
+Coverage is measured, not claimed. The table below and the numbers under it are generated from the runs (`python tests/test_fetch_data.py --write-readme`), and a test fails when this block is out of date. A scenario FD-09, FD-10 or FD-13 exists for one coin only, so those rows show `n/a` for the other two.
+
+<!-- FD-MATRIX:START (generated by tests/test_fetch_data.py --write-readme, do not edit by hand) -->
+
+| ID | Scenario | Expected | Enforced by | BTC | ETH | XRP | Traces to (agent rule; audit check) |
+|---|---|---|---|---|---|---|---|
+| FD-01 | Negative trade count | Reject | Agent gate and audit | Reject | Reject | Reject | parse_candles: trade count is a whole number of zero or more; audit `volume_trades_values` |
+| FD-02 | High below Low | Reject | Agent gate and audit | Reject | Reject | Reject | parse_candles: high is the highest and low the lowest of the day; audit `high_low_consistent` |
+| FD-03 | Close above High | Reject | Agent gate and audit | Reject | Reject | Reject | parse_candles: high is the highest and low the lowest of the day; audit `high_low_consistent` |
+| FD-04 | Wrong Kraken pair key | Reject | Agent gate and audit | Reject | Reject | Reject | fetch_rows: the result key must be the one for the pair asked; audit `kraken_reply` |
+| FD-05 | Duplicate completed candle | Reject | Agent gate and audit | Reject | Reject | Reject | completed_closes: no duplicate or out-of-order day; audit `timestamp_order`, `no_missing_days` |
+| FD-06 | Duplicate unfinished candle | Reject | Agent gate and audit | Reject | Reject | Reject | completed_closes: no duplicate or out-of-order day, unfinished candle included; audit `timestamp_order` |
+| FD-07 | Out-of-order unfinished candle | Reject | Agent gate and audit | Reject | Reject | Reject | completed_closes: no duplicate or out-of-order day, unfinished candle included; audit `timestamp_order` |
+| FD-08 | Missing calendar date | Reject | Agent gate and audit | Reject | Reject | Reject | completed_closes: no gap between completed days; audit `no_missing_days` |
+| FD-09 | Valid BTC response | Pass | Nothing reported | Pass | n/a | n/a | (all rules pass) |
+| FD-10 | Valid ETH response | Pass | Nothing reported | n/a | Pass | n/a | (all rules pass) |
+| FD-11 | Future candle | Reject | Agent gate and audit | Reject | Reject | Reject | completed_closes: no candle dated in the future; audit `timestamp_valid` |
+| FD-12 | BTC/ETH date mismatch (the coin in the column is a day behind the other two; BTC/ETH is the BTC and ETH columns) | Reject | Agent gate and audit | Reject | Reject | Reject | completed_closes: newest day is yesterday; align_series: all coins end on the same day; audit `latest_day_is_yesterday`, `coins_same_dates` |
+| FD-13 | Valid XRP response | Pass | Nothing reported | n/a | n/a | Pass | (all rules pass) |
+| FD-14 | Valid BTC, ETH and XRP together (dates aligned, cross-asset tool runs) | Pass | Nothing reported | Pass | Pass | Pass | align_series: all coins end on the same day |
+| FD-15 | Kraken answers with an error | Reject | Agent gate and audit | Reject | Reject | Reject | fetch_rows: an error or unexpected reply is an error, never a guess; audit `kraken_reply` |
+| FD-16 | Kraken unavailable (HTTP 503 on every attempt) | Reject | Agent gate and audit | Reject | Reject | Reject | fetch_rows: 3 attempts, then an error; audit `kraken_reply` |
+| FD-17 | Kraken refuses the request (HTTP 404) | Reject | Agent gate and audit | Reject | Reject | Reject | fetch_rows: another 4xx is not retried; audit `kraken_reply` |
+| FD-18 | Reply is not JSON | Reject | Agent gate and audit | Reject | Reject | Reject | fetch_rows: the reply must be JSON (retried, then an error); audit `kraken_reply` |
+| FD-19 | No candles | Reject | Agent gate and audit | Reject | Reject | Reject | completed_closes: at least 90 completed candles; audit `row_shape` |
+| FD-20 | Stale data (newest completed day is two days old) | Reject | Agent gate and audit | Reject | Reject | Reject | completed_closes: newest completed candle is yesterday; audit `latest_day_is_yesterday`, `coins_same_dates` |
+| FD-21 | Too little history (50 days) | Reject | Agent gate and audit | Reject | Reject | Reject | completed_closes: at least 90 completed candles; align_series: at least 90 days in common; audit `enough_history` |
+| FD-22 | Candle not starting at 00:00 UTC (shifted one hour) | Reject | Agent gate and audit | Reject | Reject | Reject | completed_closes: every candle starts at 00:00 UTC; audit `timestamp_midnight`, `no_missing_days` |
+| FD-23 | Time in milliseconds | Reject | Agent gate and audit | Reject | Reject | Reject | completed_closes: a time in milliseconds is dated in the future; audit `timestamp_valid` |
+| FD-24 | Candle with 7 values | Reject | Agent gate and audit | Reject | Reject | Reject | parse_candles: exactly 8 values per candle; audit `row_shape` |
+| FD-25 | Zero close | Reject | Agent gate and audit | Reject | Reject | Reject | parse_candles: close is a positive number; audit `price_values` |
+| FD-26 | Close of NaN | Reject | Agent gate and audit | Reject | Reject | Reject | parse_candles: close is a finite number; audit `price_values` |
+| FD-27 | Negative volume | Reject | Agent gate and audit | Reject | Reject | Reject | parse_candles: volume is zero or more; audit `volume_trades_values` |
+| FD-28 | Open below low | Reject | Agent gate and audit | Reject | Reject | Reject | parse_candles: high is the highest and low the lowest of the day; audit `high_low_consistent` |
+| FD-29 | VWAP above the day's high | Reject | Audit only | Reject | Reject | Reject | (the agent does not read vwap; the audit does); audit `vwap_in_range` |
+| FD-30 | A completed day with no trading | Warn | Audit warning | Warn | Warn | Warn | (a warning only); audit `zero_volume_days` |
+| FD-31 | Daily move above 30% | Warn | Audit warning | Warn | Warn | Warn | (a warning only); audit `extreme_daily_moves` |
+| FD-32 | Open more than 5% from the previous close | Warn | Audit warning | Warn | Warn | Warn | (a warning only); audit `open_vs_previous_close` |
+| FD-33 | Second source (CoinGecko) disagrees by 2% | Warn | Audit warning | Warn | Warn | Warn | (the agent never blocks on the second source); audit `coingecko_agreement` |
+| FD-34 | Second source (CoinGecko) disagrees by 5% | Reject | Audit only | Reject | Reject | Reject | (the agent never blocks on the second source); audit `coingecko_agreement` |
+| FD-35 | Second source unavailable (the source is down, or there is no key): the comparison is skipped | Pass | Nothing reported | Pass | Pass | Pass | (optional source, nothing fails); audit `coingecko_agreement` |
+| FD-36 | Close that is a word, not a number | Reject | Agent gate and audit | Reject | Reject | Reject | parse_candles: close is a finite number; audit `price_values` |
+| FD-37 | Close sent as JSON true | Reject | Agent gate and audit | Reject | Reject | Reject | parse_candles: a boolean is not a number; audit `price_values` |
+| FD-38 | Time sent as text | Reject | Agent gate and audit | Reject | Reject | Reject | parse_candles: the time is an integer; audit `timestamp_valid` |
+| FD-39 | High of zero | Reject | Agent gate and audit | Reject | Reject | Reject | parse_candles: open, high and low are positive numbers; audit `price_values` |
+| FD-40 | Volume that is a word | Reject | Agent gate and audit | Reject | Reject | Reject | parse_candles: volume is a number; audit `volume_trades_values` |
+| FD-41 | Every candle has 7 values (the format changed) | Reject | Agent gate and audit | Reject | Reject | Reject | parse_candles: exactly 8 values per candle; audit `row_shape` |
+| FD-42 | Only today's unfinished candle | Reject | Agent gate and audit | Reject | Reject | Reject | completed_closes: at least 90 completed candles; audit `latest_day_is_yesterday`, `enough_history` |
+| FD-43 | The other two coins are unavailable (this coin's data is fine): the date alignment cannot be checked and is reported as SKIP | Pass | Nothing reported | Pass | Pass | Pass | (nothing to align with); audit `coins_same_dates` |
+| FD-44 | Second source answers in its real format with malformed points mixed in: they are skipped, the rest is compared | Pass | Nothing reported | Pass | Pass | Pass | (the agent never reads the second source) |
+| FD-45 | Second source answers in an unexpected shape (no prices): nothing to compare, the comparison is skipped | Pass | Nothing reported | Pass | Pass | Pass | (optional source, nothing fails); audit `coingecko_agreement` |
+
+Measured coverage (from the run that produced this table):
+
+- **Scenarios:** 45, of which 12 are from the brief (FD-01 to FD-12) and 33 are added.
+- **Scenario x coin cells run:** 129. **As expected:** 129 of 129.
+- **Audit checks that report a non-PASS in at least one scenario:** 17 of 17.
+- **Executable lines run by the scenarios** (Python's `trace` module): `fetch_coingecko` 100%, `fetch_rows` 100%, `fetch_candles` 100%, `as_number` 100%, `parse_candles` 100%, `completed_closes` 100%, `align_series` 100%, `check_rows` 100%, `check_coins_aligned` 100%, `check_against_coingecko` 100%, `coingecko_prices` 100%, `validate` 100%, `verdict` 100%, `num` 100%, `is_whole` 100%, `label` 100%, `examples` 100%.
+
+<!-- FD-MATRIX:END -->
+
+Mutation check: six deliberate breaks of the gate (for example removing the future-candle rule or the same-day rule) were each caught by the scenarios that trace to that rule, and by no others. One limit stays: the scenarios use a scripted Kraken, so they prove the rules, not Kraken's behaviour.
+
+## Alert rule and thresholds
+
+The full rules are in [`playbook.md`](playbook.md). An alert needs a **rank of 95 or higher on at least one of three price measures** for a coin, against that coin's own history, and it needs valid data for that coin in this run. Context never alerts alone. Every number the agent uses:
 
 | Threshold | Value | Reason | Source |
 |---|---|---|---|
 | Window | 30 days (31 closes, 30 returns) | Same window as the Assignment 1 analysis | Assignment 1 README, Method |
-| Alert rank | 95 | Top 5% of the coin's own days, about 1 day in 20 per metric. 99 almost never fires, 90 fires about 1 day in 10 | Own design, backtested by `calibrate.py` |
+| Alert rank | 95 | Top 5% of the coin's own days, nominally about 1 day in 20 per metric. 99 almost never fires, 90 fires about 1 day in 10 | Own design, backtested below |
 | Near threshold | 90 to below 95 | A day just under the bar is not a breach | Own convention |
 | Minimum history | 90 completed candles | The top 5% of 90 days is 4 or 5 days, the least that makes a rank meaningful | Own design, arithmetic |
 | Repeat lookback | last 7 decisions | A spike stays in the 30-day window for 30 days, so it would repeat daily. A week is long enough to stop that | Window arithmetic, own design for 7 |
 | Message length | 280 characters | Readable at a glance in an email | Own convention |
-| Step limit | 8 AI calls | A run that needs more is stuck, so it stops with an error | Own design |
-| Plan limit | 10 steps | A complete plan needs 6 (three coins, cross-asset, memory, at least one playbook search), 10 leaves room for several rule searches. It was 8 and a live Planner run skipped a rule search | Own design, after the failed run |
+| Step limit | 12 AI calls | A run that needs more is stuck, so it stops with an error. It was 8 until two tools were added | Own design |
+| Plan limit | 12 steps | A complete plan needs at least 8, and 12 leaves room for several rule searches. It was 8, then 10, after a live Planner run skipped a rule search | Own design |
 | Trend windows | 30 and 60 days | The 30-day window is the project window. 60 days gives a longer view of the same direction | Own design |
 | Volume baseline | mean of the previous 30 days | Same window as every other metric. Today is excluded so a spike does not dilute its own baseline | Own design |
 | Context flags | rank 95 or higher (relative strength and correlation: also 5 or lower) | Same alert rank as the price metrics, two-sided where either end is unusual. A flag never alerts alone | Own design |
@@ -208,15 +388,25 @@ These are descriptive conventions, not market standards and not trading signals.
 
 ### Backtest of the alert rank
 
-Not run yet. TODO(you): run `python calibrate.py` on your own computer (it needs access to Kraken) and paste its table here. It counts how many days in the last ~700 would have raised an alert, and how many separate episodes that is.
+The same function as `calibrate.py` (`backtest`) was run on the closes in the live export of 2026-11-21 (720 completed days per coin, ending 2026-11-20). For every day from 2025-03-31, each metric is ranked against that coin's earlier days only, exactly as the agent's market tool does. An alert day is a day on which at least one of the three ranks reached 95. An episode is a run of consecutive alert days.
+
+| Coin | Days tested | Alert days | Share of days | Separate episodes | Volatility alone | Distance alone | Drawdown alone |
+|---|---|---|---|---|---|---|---|
+| BTC | 600 | 84 | 14.0% | 9 | 4.8% | 9.7% | 7.3% |
+| ETH | 600 | 46 | 7.7% | 7 | 2.7% | 3.7% | 4.2% |
+| XRP | 600 | 52 | 8.7% | 4 | 0.0% | 3.8% | 5.5% |
+
+What it says: with three metrics combined, a coin is at the alert rank on about 1 day in 7 (BTC), 1 in 13 (ETH) and 1 in 12 (XRP), in 4 to 9 separate episodes over 600 days. That is more than the nominal 5% per metric (BTC distance 9.7%, drawdown 7.3%). I have not investigated why. Overlapping 30-day windows and ranking against earlier days only are the likely candidates, and the "how often" statistics in the brief tell the AI and the reader the real rate. XRP's volatility rank never reached 95 in this window, so for XRP only the distance and drawdown measures raised the rank. The repeat-alert rule (a coin alerted in the last 7 decisions is not alerted again unless something new breaches) is what keeps an episode from producing a daily alert. This is an in-sample count on one 600-day window, not a forecast. `python calibrate.py` reproduces it on any machine that can reach Kraken.
 
 ### Hand check
 
-TODO(you): pick one number from the market tool (for example `volatility_30d_daily_pct` for BTC). Download the same 31 closes from Kraken, recalculate it in Google Sheets with `=STDEV.S(...)` on the 30 daily returns, and write what you found here.
+BTC on 2026-11-20: the agent reports `volatility_30d_daily_pct` 2.3465 and a daily return of -5.0186%. I recomputed both from the raw closes in `kraken_candles.csv` with only Python's standard library: 31 closes from 2026-10-21 to 2026-11-20, 30 daily percent returns, `statistics.stdev` (sample standard deviation). Result: 2.3465 and -5.0186. The agent's numbers match an independent calculation. The recalculation in Google Sheets with `=STDEV.S(...)` is on the checklist at the end.
 
-## Guardrails (all in code, applied after the AI answers)
+## Guardrails
 
-| Guardrail | Function | Proved by (tests/test_guardrails.py) |
+All in code, applied after the AI answers.
+
+| Guardrail | Function | Proved by |
 |---|---|---|
 | The answer must be valid JSON with the right keys, or the AI is asked again (twice at most, then the run stops) | `parse_decision`, loop in `run_agent_loop` | `AnswerShape`, `test_loop_asks_again_after_an_invalid_answer_but_only_twice` |
 | Only allowed tools, and only watchlist coins; anything else is an error, never a guess | `check_call`, `run_tool` | `ToolRules`, `test_loop_refuses_a_coin_that_is_not_on_the_watchlist` |
@@ -226,17 +416,35 @@ TODO(you): pick one number from the market tool (for example `volatility_30d_dai
 | No alert without valid market data in this run | `apply_guardrails` | `test_alert_without_valid_market_data_is_blocked` |
 | Step limit: the run stops with an error | `MAX_STEPS` | `test_loop_stops_with_an_error_at_the_step_limit` |
 | A plan is validated before anything runs; one retry, then the run stops | `validate_plan`, `make_plan` | `test_every_kind_of_bad_plan_is_refused`, `test_planner_stops_after_a_second_bad_plan` |
-| A broken reviewer reply never blocks the job, and the code guardrails still apply after it | `review_draft` | `test_a_broken_reviewer_reply_never_blocks_the_job`, `test_code_guardrails_still_apply_after_a_reviewer_that_approves_everything` |
+| A broken reviewer reply never blocks the job, and the guardrails still apply after it | `review_draft` | `test_a_broken_reviewer_reply_never_blocks_the_job`, `test_code_guardrails_still_apply_after_a_reviewer_that_approves_everything` |
 | **Context never alerts alone.** Every coin in an alert needs its own price rank at or above the alert rank in this run's market data | `apply_guardrails` | `NoAlertOnContextAlone` in `tests/test_context.py` |
 | The web app writes only to four named extra tabs, with a fixed header and row width, and text that starts with = + - @ is escaped | `append_`, `cell_` in `Code.gs` | `SheetTabs` in `tests/test_context.py` (row widths against the `Code.gs` headers) |
 | The Sheet key never appears in an error message or log | `redact` | `Delivery.test_the_key_never_appears_in_an_error` |
 
-**The advice filter.** An alert whose message contains any of these words, as a whole word in any letter case, is blocked: buy, buying, bought, sell, selling, sold, long, short, hold, holding, entry, exit, accumulate, should, recommend, recommends, recommended, recommendation, advise, advice, take profit, stop loss, stop-loss. The list covers actions on a position (buy, sell, long, short, hold, entry, exit, accumulate, take profit, stop loss) and advisory verbs (should, recommend, advise). It matches whole words, so "longer", "shortfall" and "holdings" pass. The list is the constant `BANNED_WORDS` at the top of `agent.py`. A blocked alert is stored in the Sheet with its reason and an empty message.
+**The advice filter.** An alert whose message contains any of these words, as a whole word in any letter case, is blocked: buy, buying, bought, sell, selling, sold, long, short, hold, holding, entry, exit, accumulate, should, recommend, recommends, recommended, recommendation, advise, advice, take profit, stop loss, stop-loss. The list covers actions on a position and advisory verbs. It matches whole words, so "longer", "shortfall" and "holdings" pass. The list is the constant `BANNED_WORDS` at the top of `agent.py`. A blocked alert is stored in the Sheet with its reason and an empty message.
 
-### Two kinds of tests
+## Testing
 
-- **Offline, no AI, no network (177 tests):** `tests/test_guardrails.py` (53), `tests/test_context.py` (34), `tests/test_report.py` (31) and `tests/test_sources.py` (59). A scripted AI gives the same answers every time, so these are exact. They check the maths against hand calculations, the new metrics, the rule that context never alerts alone, the Sheet tab widths against `Code.gs`, and the brief. The trigger levels in the brief are verified by putting each level in as the next close and recomputing the metric: it lands on the target value. The sources tests feed each parser a sample reply and check the numbers by hand (order-book depth, funding units, the DVOL and volume ranks, the 1% price tolerance), prove that an error never contains a key, that every source being down still gives a complete context, that the fakes have the same fields as the real parsers, and that a context-only alert is blocked. Writing them found one real bug: a price gap of exactly 1% was reported as a disagreement because of floating-point noise, so the comparison now rounds first.
-- **Scenario tests, `python agent.py --test` (20 scenarios):** the scenarios in `scenarios.py` on fake market data and a fake history, with the real AI and the real playbook search. A failed scenario exits with code 1, so the GitHub run turns red.
+### Offline tests: 286, no AI and no network
+
+A scripted AI gives the same answers every time, so these are exact. `python tests/<file> -v` runs each one, and the `Tests` workflow runs all eight on every push that changes code or the playbook.
+
+| File | Tests | What it proves |
+|---|---|---|
+| `tests/test_guardrails.py` | 53 | The agent loop, planner, reviewer and every guardrail, with hand-calculated metrics |
+| `tests/test_context.py` | 34 | The new metrics, the rule that context never alerts alone, the Sheet tab widths against `Code.gs` |
+| `tests/test_report.py` | 31 | The executive brief: numbers, trigger levels (each level is put in as the next close and the metric recomputed, and it lands on the target), labelling of who wrote what |
+| `tests/test_sources.py` | 59 | Each parser on a sample reply, checked by hand (order-book depth, funding units, DVOL and volume ranks, the 1% price tolerance); an error never contains a key; every source down still gives a complete context; the fakes have the same fields as the real parsers |
+| `tests/test_export.py` | 18 | The CSV export: all 8 Kraken values kept, full price digits, factors equal the agent's own summary, the features file agrees with the factors file, nothing written when a coin fails |
+| `tests/test_validate.py` | 32 | The data validation: the 43 injected faults, the CoinGecko comparison, the cross-coin check, the report |
+| `tests/test_fetch_data.py` | 11 | The 45 fetch-data scenarios for each coin, the brief's 12 scenarios by ID, measured coverage of the gate and the audit, and the README matrix in sync |
+| `tests/test_features.py` | 48 | The 87-column features: every formula against numbers worked out by hand, the label boundaries, blanks for short history, the link to Bitcoin, refusal of a bad candle, mutation-tested |
+
+Writing the sources tests found one real bug: a price gap of exactly 1% was reported as a disagreement because of floating-point noise, so the comparison now rounds first.
+
+### Scenario tests with the real AI
+
+`python agent.py --test` runs the 20 scenarios in `scenarios.py` on fake market data and a fake history, with the real AI and the real playbook search. A failed scenario exits with code 1, so the GitHub run turns red. `--only 8-20` runs some of them, and `--publish` also writes each result to the `scenarios` tab.
 
 | # | Scenario | Expected |
 |---|---|---|
@@ -261,13 +469,38 @@ TODO(you): pick one number from the market tool (for example `volatility_30d_dai
 | 19 | Every context source unavailable, BTC breach | Alert still sent, nothing invented |
 | 20 | Extreme fear on the sentiment index, calm prices | No alert |
 
-Real-AI status on 2026-11-21: scenarios 1 to 7 passed earlier, before the two context tools existed, and need a re-run with six tools. Scenarios 9 and 17 to 20 passed with the real AI on the six tools. Scenario 10 started but did not finish (daily token cap). Scenarios 8 and 11 to 16 have not been run with the real AI yet. See Results.
+### Red, then green
 
-### Token budget for scenario runs
+A test has to be able to fail. I broke a guardrail on purpose: the message length limit `MAX_MESSAGE_CHARS` was raised from 280 to 2800 (commit `3258757`).
+
+- **Red run** ([run 44737225410](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44737225410)): the step "Guardrail tests (offline)" failed with `FAILED (failures=2)`. The failing tests were `AnswerShape.test_bad_answers_are_refused` (an over-long message was accepted) and `Playbook.test_every_threshold_in_the_code_appears_in_the_playbook` (the code and the playbook no longer agreed on 280). The scenario step was skipped because the first step failed.
+- **Green run** ([run 44737359535](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44737359535), commit `c09991e`, restoring 280): the offline tests pass again and the seven scenarios then run with the real AI.
+
+## Verification status
+
+What has been proved, and how. Dates are 2026-11-21 unless stated.
+
+| What | Status | Evidence |
+|---|---|---|
+| 286 offline tests | Pass locally. The `Tests` workflow runs them on the next code push | Local runs |
+| Each free source on live data | Verified, all five context sources answered for all three coins | [44842220066](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44842220066), depth fix [44842558674](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44842558674) |
+| Kraken data export and factors on live data | Verified | [44848783647](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44848783647) |
+| Data validation on live data | Verified: 47 PASS, 1 WARN (real event), 0 FAIL. With the cross-coin check: 49 checks, 48 PASS, 1 WARN, 0 FAIL | [44849463885](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44849463885), [44852768752](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44852768752) |
+| Stricter candle checks, `market_features.csv` (87 columns) and the cross-coin check on live data | Verified: all 2,163 live candles accepted, 2,160 feature rows, no NaN or infinite cell. The same-day rule inside the agent (`align_series`) is not yet run on live data | [44852768752](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44852768752) |
+| Real AI on the six tools, fake scenario data | Scenarios 9 and 17 to 20 passed (5 of 5) | [44843995212](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44843995212), [44845055590](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44845055590) |
+| Real AI, scenarios 1 to 7 | Passed 2026-11-20 on the four-tool version. Not yet re-run with six tools | [44736173365](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44736173365) |
+| Real AI, scenarios 8 and 10 to 16 | Not run. Scenario 10 started and hit Groq's daily cap | |
+| Full agent on live data, six tools, new Sheet tabs | Not yet confirmed. Happens at the first daily run after pull request 2 (scheduled 05:17 UTC on 2026-11-21) | Update this row from the run log |
+| Full agent on live data, four-tool version | Verified 2026-11-20: alert for BTC and XRP, Sheet row saved, email sent | See Sample output |
+| Executive brief on live data | Verified: the workflow ran and sent the email | `Executive report` workflow |
+| Planner, with the real AI | 6 of 7 on scenarios 1 to 7. The fix was not re-run | [44740770242](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44740770242) |
+| Reviewer versions, with the real AI | No result (the one run was cancelled by the rate limit) | [44741524858](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44741524858) |
+
+## Token budget for scenario runs
 
 The Groq free tier allows 8,000 tokens per minute and 200,000 tokens per day for `openai/gpt-oss-120b`. The run log prints the tokens Groq reports for each scenario (`[scenario N: X AI calls, Y tokens]`), so this plan uses measured numbers where there are any.
 
-**Measured, Agent loop with six tools, 2026-11-21 ([run 44843995212](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44843995212) and [run 44845055590](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44845055590)):**
+**Measured, Agent loop with six tools ([run 44843995212](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44843995212) and [run 44845055590](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44845055590)):**
 
 | Scenario | Result | AI calls | Tokens |
 |---|---|---|---|
@@ -278,88 +511,76 @@ The Groq free tier allows 8,000 tokens per minute and 200,000 tokens per day for
 | 19 Every context source unavailable, BTC breach | PASS (alert) | 11 | 29,758 |
 | 10 Two coins breach at once | did not finish: daily cap reached | 4 | 6,098 |
 
-The five finished scenarios cost 116,419 tokens, about 23,000 each. A calm scenario with no alert costs the least (about 14,000 to 19,000). A scenario where the agent writes and checks an alert costs about 26,000 to 30,000. The other scenarios are estimated by type, not measured.
+The five finished scenarios cost 116,419 tokens, about 23,000 each. A calm scenario costs the least (about 14,000 to 19,000), and a scenario where the agent writes and checks an alert costs about 26,000 to 30,000. The scenarios not listed are estimated by type. The 20 scenarios together cost about 460,000 tokens, more than two days of the free allowance.
 
-**How the cap behaves.** On 2026-11-21 Groq refused scenario 10 with HTTP 429: limit 200,000, used 197,808, requested 2,489, try again in 2 minutes 8 seconds. About 297 tokens were missing and the wait was 128 seconds, which is about 2.3 tokens a second, or 200,000 per 24 hours. My reading is that the allowance refills steadily (about 8,300 tokens an hour) and does not reset at midnight. This is inferred from that one message, not from Groq's documentation. The 197,808 included about 75,000 tokens from the previous day's runs, so check the usage page before a big batch.
+**How the cap behaves.** Groq refused scenario 10 with HTTP 429: limit 200,000, used 197,808, requested 2,489, try again in 2 minutes 8 seconds. About 297 tokens were missing and the wait was 128 seconds, which is about 2.3 tokens a second, or 200,000 per 24 hours. My reading is that the allowance refills steadily (about 8,300 tokens an hour) and does not reset at midnight. This is inferred from that one message, not from Groq's documentation. The 197,808 included about 75,000 tokens from the previous day's runs, so check the usage page before a big batch.
 
-**Plan for the free tier.** Keep about 30,000 tokens free for the scheduled daily run (an estimate: the daily run with the new tools has not been measured). That leaves about 170,000 a day, or about six to seven scenarios. Ranked by what would hurt most if the agent got it wrong:
+**Plan for the free tier.** Keep about 30,000 tokens free for the scheduled daily run (an estimate: the daily run with six tools has not been measured). That leaves about 170,000 a day, or six to seven scenarios. Ranked by what would hurt most if the agent got it wrong:
 
 | Day | Scenarios | Why these | Tokens |
 |---|---|---|---|
 | 1 (2026-11-21, done) | 17, 18, 19, 20, 9 | The new tools: leverage build-up with a calm price, price sources disagreeing in a real breach, every context source down in a breach, extreme sentiment with a calm price, and a volume-confirmed breakout | 116,419 measured |
-| 2 | 10, 14, 11, 3, 8, 12 | Real breaches first: a multi-coin sell-off (10), a new coin after a repeat alert (14), a single coin (11), repeat-alert suppression so alerts do not become noise (3), volume without a price move (8), a correlation breakdown (12) | about 130,000 (estimate) |
+| 2 | 10, 14, 11, 3, 8, 12 | Real breaches first: a multi-coin sell-off (10), a new coin after a repeat alert (14), a single coin (11), repeat-alert suppression (3), volume without a price move (8), a correlation breakdown (12) | about 130,000 (estimate) |
 | 3 | 13, 16, 15, 4, 5, 2 | XRP relative-strength outlier (13), cross-asset data missing (16), instruction hidden in text (15), Kraken outage (4), advice trap (5), the plain spike (2) | about 130,000 (estimate) |
-| 4 | 1, 6, 7 | Calm, one coin down, near threshold: passed earlier with four tools, re-run with six | about 45,000 (estimate) |
+| 4 | 1, 6, 7 | Calm, one coin down, near threshold: passed with four tools, re-run with six | about 45,000 (estimate) |
 
-Batches are run with `python agent.py --test --only 10,14,11,3,8,12 --publish`, or in GitHub: Actions > Tests > Run workflow, with the `only` list and `publish` ticked. Every result is added to the `scenarios` tab, including a scenario that did not finish.
+Run a batch with `python agent.py --test --only 10,14,11,3,8,12 --publish`, or in GitHub: Actions > Tests > Run workflow, with the `only` list and `publish` ticked. Every result goes to the `scenarios` tab, including a scenario that did not finish.
 
+**A push that changes code runs scenarios 1 to 7 with the real AI**, about 160,000 tokens at the measured average (an estimate), which would starve the daily run. Documentation-only changes do not trigger it, and commits that should not run it carry `[skip ci]`. `python agent.py --measure` (12 full runs of all 20 scenarios, more than 5 million tokens) needs the paid tier and cannot be done on the free one.
 
-### Red, then green
+## Results and conclusion
 
-I broke a guardrail on purpose: the message length limit `MAX_MESSAGE_CHARS` was raised from 280 to 2800 (commit `3258757`).
+**Measured with the real AI:**
 
-- **Red run** ([run 44737225410](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44737225410)): the step "Guardrail tests (offline)" failed with `FAILED (failures=2)`. The two failing tests were `AnswerShape.test_bad_answers_are_refused` (an over-long message was accepted) and `Playbook.test_every_threshold_in_the_code_appears_in_the_playbook` (the code and the playbook no longer agreed on 280). The scenario step was skipped because the first step failed.
-- **Green run** ([run 44737359535](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44737359535), commit `c09991e`, restoring 280): the offline tests pass again and the seven scenarios then run with the real AI.
+| Version | Result | Detail |
+|---|---|---|
+| Agent loop, four tools | 7 of 7 on scenarios 1 to 7 (one run) | 46 AI calls, 15 rate-limit waits, none unfinished ([run 44736173365](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44736173365)) |
+| Agent loop, six tools | 5 of 5 on scenarios 9 and 17 to 20 (one run) | 46 AI calls, 116,419 tokens. Scenario 10 did not finish: the daily cap was reached after 4 AI calls, so it counts as "did not finish", not as a wrong answer. Its row in the `scenarios` tab says so |
+| Planner (first plan prompt) | 6 of 7 on scenarios 1 to 7 (one run) | The failed scenario was "same spike, already alerted yesterday": the plan skipped the repeat-alert rule search. The plan prompt asked for about 10 steps while the limit was 8. The fix is a rewritten plan prompt and a larger limit (now 12). It was not re-run with the real AI ([run 44740770242](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44740770242)) |
+| Planner + reviewer | No result | The run ([44741524858](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44741524858)) was cancelled after repeated Groq rate-limit answers (HTTP 429), so it proves nothing either way |
+| Agent loop + reviewer | Not run | |
 
-TODO(you): screenshots of both runs, with the log open (a run with an empty log means nothing ran).
+The scenarios use fake market data and fake tool replies with the real AI, not live data. Scenarios 8 and 10 to 16 are not run yet, and scenarios 1 to 7 should be re-run now that there are six tools (see the day plan above).
 
-## Sample output
+**Conclusion on the evidence so far.** The daily workflow runs the **Agent loop with the reviewer off**. It is the only version with clean results (7 of 7 on four tools, 5 of 5 on six), it needs the fewest AI calls, and the guardrails that matter (valid sources, no advice, valid data, context never alerts alone) run in code in every version, so a second AI pass is not what keeps an alert honest. The Planner failed once because its plan left out a rule search, which the code does not check, and the fix is untested with the real AI. The two reviewer versions have no usable live result, so no claim is made about them. The cost of the chosen version is about 23,000 tokens and 8 to 11 AI calls per scenario on the free tier, with rate-limit waits. This conclusion is provisional until the day 2 to 4 batches and a `--measure` run (paid tier) add evidence. It is set in `.github/workflows/daily.yml`.
 
-Live run on 2026-11-20 (Actions > Daily crypto watch, version Agent loop). The agent fetched BTC, ETH and XRP from Kraken, read its history from the Sheet, searched the playbook and decided `alert = true` for BTC and XRP with the sources "Alert rules" and "Trend against the 30-day average". The Sheet web app saved it as row 2 and sent the email (`email sent: True`). The reasoning in the row quotes the ranks it was given: BTC distance rank 97.0, BTC drawdown rank 96.6, XRP drawdown rank 96.1, all at or above the alert rank of 95.
-
-TODO(you): add a screenshot of the Sheet row (with its sources) and of the email.
-
-## Results and conclusion (Step 13)
-
-Each version is to be run three times on the same scenarios with `python agent.py --measure` (also saved in `results.md`).
-
-**Measured so far, on scenarios 1 to 7 with the real AI (GitHub runs on 2026-11-20):**
-
-- **Agent loop:** 7 of 7, 46 AI calls, 0 scenarios unfinished, 15 rate-limit waits ([run 44736173365](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44736173365)).
-- **Planner (first plan prompt):** 6 of 7 ([run 44740770242](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44740770242)). The failed scenario was "same spike, already alerted yesterday": the plan skipped the repeat-alert rule search. The plan prompt asked for about 10 steps while the limit was 8. The fix is a rewritten plan prompt and a limit of 10 (it requires one step per coin, one cross-asset step, one history step and the rule searches). It has not been re-run with the real AI.
-- **Planner + reviewer:** no result. The run ([44741524858](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44741524858)) was cancelled after repeated Groq rate-limit answers (HTTP 429) on the free tier, so it proves nothing either way.
-- **Agent loop + reviewer:** not run.
-- **Agent loop with the six tools, scenarios 9 and 17 to 20 (2026-11-21):** 5 of 5 passed. Scenarios 17 to 20: 36 AI calls, 88,831 tokens, 27 rate-limit waits ([run 44843995212](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44843995212)). Scenario 9: 10 AI calls, 27,588 tokens ([run 44845055590](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44845055590)). These scenarios use fake market data and fake tool replies with the real AI, not live data.
-- **Scenario 10 (two coins breach at once):** did not finish. Groq's free daily cap was reached after 4 AI calls (HTTP 429, see Token budget), so the run counts as "did not finish", not as a wrong answer. Its row in the `scenarios` tab says so. It is the first scenario of day 2.
-- **Scenarios 8 and 11 to 16:** not run with the real AI yet. Scenarios 1 to 7 should be re-run now that there are six tools.
-- **Cost:** about 23,000 tokens per scenario on average, so the 20 scenarios on the Agent loop cost about 460,000 tokens, more than two days of the free allowance. A full `--measure` is out of reach on the free tier.
-
-TODO(you): paste the full table once `--measure` has been run (paid tier, or several days).
-
-| Version | Passes (run 1, run 2, run 3) | Calls per run | Ever failed to finish? |
-|---|---|---|---|
-| Agent loop | 7/7 on scenarios 1 to 7 (one run only, four tools) | 46 | no |
-| Agent loop, six tools | 5/5 on scenarios 9 and 17 to 20 (one run only); scenario 10 hit the daily cap | 46 for the 5 | 1 (scenario 10, rate limit) |
-| Agent loop + reviewer | not run | | |
-| Planner | 6/7 on scenarios 1 to 7 with the first plan prompt (one run only) | | no |
-| Planner + reviewer | no result (run cancelled by the rate limit) | | |
-
-Conclusion: TODO(you). Which version runs daily, why, and what it costs in calls and waiting. On the evidence so far the Agent loop is the only version with a clean live result, and the Planner failed because its plan omitted a rule, which the code does not check. An honest result such as "the reviewer did not help" is a good answer. Then set that version in `.github/workflows/daily.yml` and in `tests.yml`.
-
-## Executive intelligence brief (extra)
+## Executive intelligence brief
 
 `report.py` builds a one-page HTML brief for decision makers, and the `Executive report` workflow emails it after every successful daily run.
 
 - **What it shows:** a banner and status, the question the agent answers, headlines, a per-coin snapshot with ranks, three charts (price indexed to 100, a rank heatmap with the price measures that can alert next to the context measures, and how unusual each coin has been over 60 days), a context section (trend, volume, relative strength, correlation between coins), a market context section (liquidity, funding and open interest, implied volatility, market-wide volume, price check, fear and greed, with source attribution in the footer), how often each coin reached the alert rank in its own history, the AI's analysis, what to watch, conditional watch scenarios with trigger levels, the decision history from the Sheet, and what the agent does in each situation.
 - **Conditional watch scenarios.** Three observable conditions (stress persists, back to normal, a new breach), what the agent does in each, and the invalidation. A matrix gives, for each coin, the next-day close above or below which volatility, distance from the 30-day average or drawdown would reach the alert rank. They are worked out from the coin's own history by code and are not targets or predictions.
 - **How often the alert rank is reached.** The same rule run over each coin's history, each day ranked only against the days before it, with the number of days, the share of days and the separate episodes. It is an in-sample count and the page says so.
-- **Who wrote what is labelled on the page.** Numbers, ranks, headlines and levels are computed by code. The analysis text is the agent's own latest decision, read back from the Sheet, and it is marked as written by AI. The page shows whether that decision passed the code guardrails, and cross-checks the AI's coins against the code's own rank check. The report makes no extra AI call.
+- **Who wrote what is labelled on the page.** Numbers, ranks, headlines and levels are computed by code. The analysis text is the agent's own latest decision, read back from the Sheet, and it is marked as written by AI. The page shows whether that decision passed the code guardrails and cross-checks the AI's coins against the code's own rank check. The report makes no extra AI call.
 - **What it does not contain:** a price forecast, a probability or a recommendation.
 - **Run it:** `python report.py` (live Kraken data; set `SHEET_URL` to include the AI analysis and history), `python report.py --email` to also send it, `python report.py --demo` to preview the layout on synthetic data that the page labels as demo data.
-- **Email:** needs the updated `apps_script/Code.gs` (the `report` action and the `detail` option of `history`) deployed as a new version. Without it the run still finishes and prints a warning that says so.
-- **Limits:** the charts load plotly.js from a CDN, so the HTML file needs an internet connection to draw them; the email body carries the headlines and the AI analysis without charts. Tests: `python tests/test_report.py -v` (31 offline tests). The page has been checked as a rendered screenshot on demo data. It has not yet been run on live Kraken data from this repository.
+- **Email:** needs the current `apps_script/Code.gs` deployed as a new version (the `report` action and the `detail` option of `history`). Without it the run still finishes and prints a warning that says so.
+- **Limits:** the charts load plotly.js from a CDN, so the HTML file needs an internet connection to draw them. The email body carries the headlines and the AI analysis without charts.
 
-## Google Sheet tabs
+### Sample output
 
-| Tab | What it holds | Written by |
-|---|---|---|
-| `Agent` | One row per daily decision: time, version, run id, alert, coins, message, sources, reasoning, blocked reason | `deliver` (`save` action) |
-| `market_data` | The API data for each coin after each run: close, daily return, the three price metrics and ranks, trend, volume ratio and rank, relative strength. 24 columns | `publish_market_data` (`append` action) |
-| `cross_asset` | One row per coin pair after each run: the 30-day correlation, its rank and a flag. 8 columns | `publish_market_data` |
-| `context_data` | One row per coin after each run: order-book spread and depth, funding rate and who pays, open interest, implied volatility and rank, market-wide volume and rank, the second price and the gap, fear and greed, how often the coin was at the alert rank, the flags and a status (`ok` or `partial: ...`). 25 columns | `publish_market_data` |
-| `scenarios` | One row per scenario of a `--test --publish` run: result, expected, the agent's output and the number of AI calls. 13 columns | `publish` in `scenarios.py` |
+Live run on 2026-11-20 (Actions > Daily crypto watch, version Agent loop). The agent fetched BTC, ETH and XRP from Kraken, read its history from the Sheet, searched the playbook and decided `alert = true` for BTC and XRP with the sources "Alert rules" and "Trend against the 30-day average". The Sheet web app saved the decision as row 2 and sent the email (`email sent: True`). The reasoning in the row quotes the ranks it was given: BTC distance rank 97.0, BTC drawdown rank 96.6, XRP drawdown rank 96.1, all at or above the alert rank of 95.
 
-The four extra tabs need the updated `Code.gs` deployed (Deploy > Manage deployments > edit > New version). Writing to them is best effort: a failed write prints a warning and never stops the daily run. The `scenarios` tab shows how the agent shares its output in each situation, which is why every scenario run can publish to it.
+## Run it from a fresh clone
+
+1. **Python.** 3.12 or newer (the workflows use 3.12; the offline tests were run on 3.13). `git clone <this repo>`, `cd` into it, `pip install -r requirements.txt` (only `requests`).
+2. **Google Sheet and Apps Script.**
+   1. Create a Google Sheet. Copy its id (the part of the URL between `/d/` and `/edit`).
+   2. In the Sheet: Extensions > Apps Script. Paste `apps_script/Code.gs`.
+   3. Project Settings > Script properties: add `KEY` (a random string of at least 16 characters) and `SPREADSHEET_ID`. Optionally `EMAIL_TO`.
+   4. Run `authorizeOnce` once in the editor and accept the permissions. It creates the `Agent` tab. The tabs `market_data`, `cross_asset`, `context_data` and `scenarios` are created by the web app the first time the agent writes to them.
+   5. Deploy > New deployment > Web app. Execute as: Me. Who has access: Anyone. Copy the web app URL (it ends in `/exec`).
+   6. After every change to the script: Deploy > Manage deployments > pencil > Version: New version > Deploy.
+3. **Keys.** Never put them in a file.
+   - Terminal: `export GROQ_API_KEY=...` and `export SHEET_URL="https://script.google.com/macros/s/.../exec?key=<KEY>"`
+   - GitHub: Settings > Secrets and variables > Actions > add `GROQ_API_KEY` and `SHEET_URL`. Paste them without spaces.
+   - Optional and free: `COINGECKO_API_KEY`, a CoinGecko Demo key (coingecko.com/en/api, no card needed). Without it the market-wide volume and the price cross-checks say "not configured" or SKIP.
+4. **Check the pairs and the thresholds:** `python calibrate.py`
+5. **Look at the data:** `python export_data.py` (CSV files in `data_export/`) and `python validate_data.py` (the data quality report). Neither needs a key or an AI.
+6. **Run the agent:** `python agent.py` (add `--dry-run` to skip the Sheet; `--mode planner --reviewer on` for another version).
+7. **Check the free sources, no AI and no tokens:** `python agent.py --check-sources`. In GitHub: Actions > Data sources check > Run workflow. It also prints the CSV files and the validation report.
+8. **Run the tests.** Offline: `python tests/test_guardrails.py -v`, `python tests/test_context.py -v`, `python tests/test_report.py -v`, `python tests/test_sources.py -v`, `python tests/test_export.py -v`, `python tests/test_validate.py -v`, `python tests/test_fetch_data.py -v`, `python tests/test_features.py -v`. With the real AI on fake data: `python agent.py --test` (20 scenarios, about 460,000 tokens, so run them in batches with `--only`; see the token budget).
+9. **Measure the four versions:** `python agent.py --measure` (needs the paid tier).
 
 ## Files
 
@@ -367,13 +588,32 @@ The four extra tabs need the updated `Code.gs` deployed (Deploy > Manage deploym
 |---|---|
 | `agent.py` | The agent: six tools, loop, planner, reviewer, guardrails, delivery, command line |
 | `sources.py` | The free market-context sources: fetchers, parsers, flags, the data check. Never raises, never prints a key |
+| `export_data.py` | Saves the Kraken candles, the agent's daily factors and the 87-column market features as CSV, with a file that explains every column |
+| `features.py` | The market features: returns, volatility, trend, drawdown, tail risk, liquidity, link to Bitcoin, own-history ranks and labels, from Kraken's 8 values. Standard library only |
+| `validate_data.py` | The data audit: 16 checks per coin and 1 across coins, on timestamps, values and an independent CoinGecko comparison |
 | `scenarios.py` | Test mode: fake data and the 20 scenarios, `--only`, `--publish`, and the `--measure` table |
 | `report.py` | The executive intelligence brief (HTML page and email) |
 | `playbook.md` | The agent's own rules, with a reason and a source for every threshold |
 | `calibrate.py` | Backtest of the alert rank on live Kraken history |
 | `apps_script/Code.gs` | The Google Apps Script web app (history, save, append, report email). No key in it |
-| `tests/test_guardrails.py`, `tests/test_context.py`, `tests/test_report.py`, `tests/test_sources.py` | Offline tests (177) |
-| `.github/workflows/daily.yml`, `tests.yml`, `report.yml`, `sources.yml` | The daily run, the tests on every code or playbook change, the executive brief after each daily run, and the manual data-source check |
-| `AI_LOG.md` | The five most important prompts, and what the AI got wrong or I changed |
+| `tests/test_guardrails.py`, `test_context.py`, `test_report.py`, `test_sources.py`, `test_export.py`, `test_validate.py`, `test_fetch_data.py`, `test_features.py` | The 286 offline tests |
+| `.github/workflows/daily.yml` | The daily run at 05:17 UTC (09:17 in Dubai) |
+| `.github/workflows/tests.yml` | The offline tests, and the scenario tests with the real AI, on every code or playbook change |
+| `.github/workflows/report.yml` | The executive brief, emailed after each successful daily run |
+| `.github/workflows/sources.yml` | The manual data check: every source once, the CSV export and the data validation. No AI |
+| `AI_LOG.md` | The prompts that mattered most, and what the AI got wrong or I changed |
 
 Parts of the Kraken fetch and the 30-day calculations are adapted from my Assignment 1 repository (`src/fetch_data.py`, `src/analysis.py`). That repository was not changed.
+
+## Evidence still to attach before submission
+
+Things only the author can supply, or that wait on a run. Everything else in this README is already backed by a run or a test.
+
+- [ ] Screenshots of the red and the green run from "Red, then green", with the log open (a run with an empty log means nothing ran).
+- [ ] A screenshot of a Sheet row with its sources, and of the email.
+- [ ] The hand check in Google Sheets: download the 31 BTC closes, recalculate the volatility with `=STDEV.S(...)` on the 30 daily returns, and compare with the agent's number (2.3465 for 2026-11-20).
+- [ ] Optional: run `python calibrate.py` on your own computer and compare its table with the backtest above.
+- [ ] The first daily run with all six tools on live data: add its link and result to the Verification status row, and check that the `market_data`, `cross_asset` and `context_data` tabs received rows.
+- [ ] The full `--measure` table, or one line saying it was not run on the free tier.
+- [ ] Confirm or rewrite the conclusion in your own words after the day 2 to 4 scenario batches.
+- [ ] The repository link in the submission.

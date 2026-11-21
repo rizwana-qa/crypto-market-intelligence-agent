@@ -11,3 +11,6 @@ venv/
 
 # Local scratch
 .DS_Store
+
+# Output of python export_data.py
+data_export/

@@ -8,6 +8,9 @@ on:
       - "sources.py"
       - "scenarios.py"
       - "report.py"
+      - "export_data.py"
+      - "features.py"
+      - "validate_data.py"
       - "playbook.md"
       - "requirements.txt"
       - "tests/**"
@@ -70,6 +73,18 @@ jobs:
 
       - name: Sources tests (offline)
         run: python tests/test_sources.py -v
+
+      - name: Export tests (offline)
+        run: python tests/test_export.py -v
+
+      - name: Data validation tests (offline)
+        run: python tests/test_validate.py -v
+
+      - name: Fetch-data scenario tests (offline)
+        run: python tests/test_fetch_data.py -v
+
+      - name: Market feature tests (offline)
+        run: python tests/test_features.py -v
 
       # Fake market data and fake history, real AI. A failed scenario exits with code 1, so this step turns red.
       # A push tests the version the daily workflow uses (agent, reviewer off) on the first 7 scenarios, which keeps a push inside the

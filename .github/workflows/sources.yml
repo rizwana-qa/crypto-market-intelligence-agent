@@ -1,6 +1,7 @@
 name: Data sources check
 
-# Calls every free data source once and prints what came back. No AI and no tokens are used.
+# Calls every free data source once and prints what came back, then saves the Kraken data as CSV (printed in the log between
+# BEGIN and END lines) and validates it. No AI and no tokens are used.
 # Run it by hand from the Actions tab. It fails (red) when a source that is switched on cannot be read.
 on:
   workflow_dispatch:
@@ -35,3 +36,25 @@ jobs:
           # Optional and free (CoinGecko Demo key). Without it the CoinGecko lines say SKIP and everything else is still checked.
           COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
         run: python agent.py --check-sources
+
+      # The same Kraken call the agent makes, all 8 values per candle, plus every factor the agent calculates per day.
+      # Also available on your own computer: python export_data.py
+      - name: Save the Kraken data and the agent's factors as CSV
+        run: |
+          python export_data.py --out data_export
+          for file in data_export/*.csv; do
+            echo "=== BEGIN $file"
+            cat "$file"
+            echo "=== END $file"
+          done
+
+      # Checks the data just fetched: timestamps, gaps, order, values, high and low against open and close, volume and trade counts,
+      # and the latest closes against CoinGecko (a second, unrelated source). Fails (red) only when a check is FAIL.
+      - name: Validate the Kraken data
+        env:
+          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
+        run: |
+          python validate_data.py --out data_export
+          echo "=== BEGIN data_export/data_quality.csv"
+          cat data_export/data_quality.csv
+          echo "=== END data_export/data_quality.csv"

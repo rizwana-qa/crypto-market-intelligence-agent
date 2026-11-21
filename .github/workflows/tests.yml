@@ -1,6 +1,6 @@
 name: Tests
 
-# Runs on every push, but only when the code or the playbook changes.
+# A push that changes the code or the playbook runs the offline tests. The scenario tests with the real AI run only when started by hand.
 on:
   push:
     paths:
@@ -108,16 +108,19 @@ jobs:
         run: python tests/test_features.py -v
 
       # Fake market data and fake history, real AI. A failed scenario exits with code 1, so this step turns red.
-      # A push tests the version the daily workflow uses (agent, reviewer off) on the first 7 scenarios, which keeps a push inside the
-      # free Groq token cap. A manual run can pick the version, the scenarios (default 10,14,11,3,8,12, about 130K tokens) and whether to publish the results.
-      - name: Scenario tests (fake tools, real AI)
+      # It runs ONLY when you start the workflow by hand (Actions > Tests > Run workflow). A push runs the offline tests above and nothing
+      # else, because scenarios with the real AI cost about 23K tokens each and the free Groq cap is 200K tokens a day: a push used to
+      # take most of the allowance the daily run needs. When you run it by hand you pick the version, the scenarios (default 10,14,11,3,8,12,
+      # about 130K tokens) and whether to publish the results.
+      - name: Scenario tests (fake tools, real AI), manual runs only
+        if: github.event_name == 'workflow_dispatch'
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           SHEET_URL: ${{ inputs.publish && secrets.SHEET_URL || '' }}
           SCENARIO_PAUSE: "3"
           MODE: ${{ inputs.mode }}
           REVIEWER: ${{ inputs.reviewer }}
-          ONLY: ${{ inputs.only || '1-7' }}
+          ONLY: ${{ inputs.only }}
           PUBLISH: ${{ inputs.publish && 'yes' || 'no' }}
         run: |
           flags=()

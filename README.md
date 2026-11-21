@@ -488,7 +488,7 @@ What has been proved, and how. Dates are 2026-11-21 unless stated.
 
 | What | Status | Evidence |
 |---|---|---|
-| 416 offline tests | Pass locally. The `Tests` workflow runs them on the next code push | Local runs |
+| 416 offline tests | Pass locally. The `Tests` workflow runs them on every code push | Local runs |
 | Each free source on live data | Verified, all five context sources answered for all three coins | [44842220066](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44842220066), depth fix [44842558674](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44842558674) |
 | Kraken data export and factors on live data | Verified | [44848783647](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44848783647) |
 | Data validation on live data | Verified: 47 PASS, 1 WARN (real event), 0 FAIL. With the cross-coin check: 49 checks, 48 PASS, 1 WARN, 0 FAIL | [44849463885](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44849463885), [44852768752](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44852768752) |
@@ -537,7 +537,7 @@ The five finished scenarios cost 116,419 tokens, about 23,000 each. A calm scena
 
 Run a batch with `python agent.py --test --only 10,14,11,3,8,12 --publish`, or in GitHub: Actions > Tests > Run workflow, with the `only` list and `publish` ticked. Every result goes to the `scenarios` tab, including a scenario that did not finish.
 
-**A push that changes code runs scenarios 1 to 7 with the real AI**, about 160,000 tokens at the measured average (an estimate), which would starve the daily run. Documentation-only changes do not trigger it, and commits that should not run it carry `[skip ci]`. `python agent.py --measure` (12 full runs of all 20 scenarios, more than 5 million tokens) needs the paid tier and cannot be done on the free one.
+**The scenarios with the real AI run only when you start them by hand** (Actions > Tests > Run workflow). A push that changes code runs the offline tests and nothing that calls Groq. This changed on 21 November: a push used to run scenarios 1 to 7 with the real AI, about 160,000 tokens at the measured average (an estimate), and on that day two such runs used up the 200,000-token daily allowance, so the next daily run failed with HTTP 429 and no email was sent. `[skip ci]` is still honoured by GitHub. `python agent.py --measure` (12 full runs of all 20 scenarios, more than 5 million tokens) needs the paid tier and cannot be done on the free one.
 
 ## Results and conclusion
 
@@ -640,7 +640,7 @@ Live run on 2026-11-20 (Actions > Daily crypto watch, version Agent loop). The a
 | `apps_script/Code.gs` | The Google Apps Script web app (history, save, append, report email). No key in it |
 | `tests/test_guardrails.py`, `test_context.py`, `test_report.py`, `test_emailbody.py`, `test_insights.py`, `test_rag.py`, `test_asktab.py`, `test_sources.py`, `test_export.py`, `test_validate.py`, `test_fetch_data.py`, `test_features.py` | The 395 offline tests |
 | `.github/workflows/daily.yml` | The daily run at 05:17 UTC (09:17 in Dubai) |
-| `.github/workflows/tests.yml` | The offline tests, and the scenario tests with the real AI, on every code or playbook change |
+| `.github/workflows/tests.yml` | The offline tests on every code or playbook change, and the scenario tests with the real AI when started by hand |
 | `.github/workflows/report.yml` | The executive brief, emailed once after each successful daily run, then the Ask page's index check (no AI) |
 | `.github/workflows/sources.yml` | The manual data check: every source once, the CSV export and the data validation. No AI |
 | `AI_LOG.md` | The prompts that mattered most, and what the AI got wrong or I changed |

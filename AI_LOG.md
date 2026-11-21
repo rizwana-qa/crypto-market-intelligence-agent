@@ -183,3 +183,15 @@ This log records real events from the build sessions. Read it once and change an
 - The best match for "When does the agent raise an alert?" shows a weak one-line quote ("They never raise an alert on their own."), because the quote is the sentence that shares most words with the question. The tab now shows the best section in full, open. The quote rule itself is unchanged, because the parity test needs it to match `rag.py`.
 - Browser behaviour (switching tabs, asking, the declined request, text such as `<img onerror>` shown as text, charts the right width after switching back, opening at `#ask`) was checked by me in Chrome at 1440 px and 390 px. It is not part of the automatic tests.
 - Not done: the tab has not been seen on a real phone or in Safari. The charts still load plotly.js from a CDN. The tab gives the playbook's wording, not a written answer.
+
+
+## 17. A push no longer uses the Groq allowance
+
+**Prompt (in short):** after a failed daily run (HTTP 429, 197,705 of 200,000 tokens used): "i dnt understand what is issue", then "ok yes fix it".
+
+**Result:** the scenario tests with the real AI in `tests.yml` now run only when started by hand. A push that changes code runs the offline tests only. Two pushes on 21 November (the merge of PR #5, whose title lacked `[skip ci]`, and an earlier one) started the real-AI scenarios and used most of the 200,000-token daily allowance, so the next daily run failed and the report email was skipped.
+
+**What the AI got wrong or I changed:**
+- The README said a push "would starve the daily run" and relied on `[skip ci]` in every commit and PR title. I forgot it once and that was enough. A rule that depends on remembering a tag is a weak guard, so the step itself is now conditional.
+- I could not read Groq's usage page, so "tomorrow's run should work" is an estimate from the rolling 24-hour window, not a measurement.
+- Not done: the daily run has no token budget check of its own. When the cap is reached it waits seven minutes and exits with an error.

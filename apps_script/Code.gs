@@ -4,7 +4,7 @@
  * Four actions, all sent as a POST with a JSON body to  <web app URL>?key=<KEY>
  *   history   returns the agent's own recent decisions from the Agent tab (the agent's memory)
  *   save      adds one row to the Agent tab and, when alert is true, sends an email
- *   report    emails the executive brief: a short HTML summary in the body and the full HTML page as an attachment
+ *   report    emails the executive brief: the brief itself as the HTML body and the full interactive HTML page as an attachment
  *   append    adds rows to one of three extra tabs: market_data (the Kraken numbers per coin), cross_asset
  *             (correlation between coins) and scenarios (every scenario result). Only these three tab names are
  *             accepted, so a request can never create or change any other tab.
@@ -25,7 +25,7 @@ const SHEET_NAME = 'Agent';
 const HEADERS = ['Time (UTC)', 'Version', 'Run ID', 'Alert', 'Coins', 'Message', 'Sources', 'Reasoning', 'Blocked reason'];
 const MAX_BODY_CHARS = 20000;
 const MAX_REPORT_CHARS = 600000;   // the executive brief page, sent only with action "report"
-const MAX_SUMMARY_CHARS = 30000;
+const MAX_SUMMARY_CHARS = 100000;   // the email body; Gmail clips an HTML email near 102 KB, and report.py keeps it under 90 KB
 const MAX_TEXT_CHARS = 1000;
 const MAX_HISTORY_ROWS = 20;
 const MIN_KEY_LENGTH = 16;
@@ -154,7 +154,7 @@ function save_(request, props) {
   return { success: true, row: rowNumber, emailed: emailed };
 }
 
-// The executive brief: a short HTML summary in the email body and the full page as an attachment.
+// The executive brief: the brief itself as the email body and the full interactive page as an attachment.
 function report_(request, props) {
   const page = request.html;
   const summary = request.summary_html;

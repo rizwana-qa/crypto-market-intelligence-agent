@@ -151,3 +151,20 @@ This log records real events from the build sessions. Read it once and change an
 - My workflow edit had a colon inside a step name that made the YAML invalid. Validating all three workflow files with a YAML parser caught it before the push.
 - Eight deliberate breaks (advice check off, Host check off, Origin check off, rate limit off, accepting a section that was not retrieved, advice requests not declined, synonyms off, `innerHTML` added) were each caught by a test.
 - Not done: the AI's wording on the real model has not been run, because it needs the key, and the page does not read live numbers.
+
+
+## 15. The first live email: the brief as the email body, and a link that can be trusted
+
+**Prompt (in short):** after the first live run, with a screenshot: the HTML appears only as an attachment and the email body looks different, so show the finalized report directly in the email if possible. Where is the Ask page link? The email shows a local link that does not open.
+
+**Result:** `emailbody.py` draws the brief as the email body (scoreboard, top 3 headlines, stat tiles, rank heatmap, a 30-day strip of the highest rank per coin, the AI's analysis, what the history says with bars, trigger levels, context, market context, decision history), using tables and inline styles because an email program runs no scripts. The interactive page stays attached. The Ask panel now says plainly that the Ask page runs on the computer, and `start_ask_page.bat` starts it in one click. If an https address is set (`REPORT_URL`, `ASK_URL`), that panel becomes a real button.
+
+**What the AI got wrong or I changed:**
+- My first email carried only the headlines and three numbers. I chose that because charts cannot run in email, but I did not offer the table-drawn version, and the owner had to ask for it.
+- The AI's analysis was missing from the email on a day with no alert. The code showed that block only when the message was not empty, and on a no-alert day the message is empty. The screenshot showed it. The block now always shows the reasoning, the rules cited and the guardrail result, and a test covers the no-alert case.
+- The link was a real hyperlink to 127.0.0.1. It looked clickable and could not open from an email, and cannot open at all on a phone. It is now text that says so, plus a launcher. I did not invent a hosted address: a working link needs the owner to publish one.
+- The web app refused an email body above 30,000 characters. The full body is about 70 to 80 KB, so `Code.gs` now allows 100,000, and the sender retries once with a shorter body, with a warning, if an older script is still deployed. Gmail clips near 102 KB, so the renderer stays under 90 KB and drops the least important sections first.
+- My contrast test failed: white text on my amber was 3.6 to 1. The email uses a darker amber (5.0 to 1). The page's heatmap still uses the lighter amber with white numbers, so that one is open.
+- My advice-word test flagged "recommends" in an intro sentence of mine, and "recommendation" in the disclaimer that says there is none. I reworded the sentence and excluded only the disclaimer from the scan.
+- Not done: the email has not been seen in Gmail, Outlook or a phone app. I rendered it in Chrome at 700 px and 375 px from demo data and from the real Kraken candles. Outlook for Windows and Gmail's dark mode can change colours and spacing.
+

@@ -144,10 +144,10 @@ class Email(unittest.TestCase):
     def test_the_email_has_the_question_and_the_headlines_and_no_script(self):
         email = report.build_email(make_data(decisions=[decision()]))
         self.assertIn("DAILY BRIEF", email)
-        self.assertIn("TOP 3 HEADLINES", email)
+        self.assertIn("Top 3 headlines", email)
         self.assertIn("BTC drawdown rank 96.6.", email)
         self.assertIn("Rizwana Zahoor", email)
-        self.assertIn("python rag_server.py", email)
+        self.assertIn("python rag_server.py", email)           # said plainly as a command to run, not offered as a link that cannot open
         self.assertNotIn("<script", email.lower())
 
     def test_an_old_web_app_gives_a_warning_not_a_crash(self):

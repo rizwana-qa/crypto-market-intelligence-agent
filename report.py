@@ -1648,9 +1648,12 @@ def main(argv=None):
     print(f"[report] subject: {insights.subject_line(coins)}", flush=True)
     for line in headlines(data):
         print(f"[report]   {line}", flush=True)
+    email_failed = False
     if args.email and not args.demo:
-        send_email(data, page)
-    return 0 if good(data) or args.demo else 1
+        email_failed = not send_email(data, page)
+        if email_failed:
+            print(f"ERROR: the report email was not sent (the reason is in the warning line). The page was still written to {args.out}.", file=sys.stderr, flush=True)
+    return 1 if email_failed or not (good(data) or args.demo) else 0
 
 
 if __name__ == "__main__":

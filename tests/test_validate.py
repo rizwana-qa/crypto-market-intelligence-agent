@@ -100,7 +100,9 @@ FAULTS = {
     "a time as a decimal": (edit_with(MID, T, lambda r: float(r[T])), {"timestamp_valid": vd.FAIL}, True),
     "a time as true": (edit(MID, T, True), {"timestamp_valid": vd.FAIL}, True),
     "a time before 2013": (edit(MID, T, 0), {"timestamp_valid": vd.FAIL}, True),
-    "a candle that starts tomorrow": (lambda rows: rows + [[TODAY + DAY] + rows[-1][1:]], {"timestamp_valid": vd.FAIL}, False),   # the agent only uses candles older than today, so it never reads this one
+    "a candle that starts tomorrow": (lambda rows: rows + [[TODAY + DAY] + rows[-1][1:]], {"timestamp_valid": vd.FAIL}, True),
+    "today's unfinished candle twice": (lambda rows: rows + [list(rows[-1])], {"timestamp_order": vd.FAIL, "no_missing_days": vd.PASS}, True),
+    "today's unfinished candle before yesterday's": (swap(-2, -1), {"timestamp_order": vd.FAIL, "no_missing_days": vd.PASS}, True),
     "stale data (newest completed day is two days old)": (lambda rows: rows[:-2], {"latest_day_is_yesterday": vd.FAIL}, True),
     "only today's unfinished candle": (lambda rows: rows[-1:], {"latest_day_is_yesterday": vd.FAIL, "enough_history": vd.FAIL}, True),
     "only 50 days of history": (lambda rows: rows[-51:], {"enough_history": vd.FAIL, "no_missing_days": vd.PASS}, True),
@@ -116,23 +118,23 @@ FAULTS = {
     "a close of infinity": (edit(MID, C, "inf"), {"price_values": vd.FAIL}, True),
     "a close that is a word": (edit(MID, C, "abc"), {"price_values": vd.FAIL}, True),
     "a close that is missing (null)": (edit(MID, C, None), {"price_values": vd.FAIL}, True),
-    "a close of true": (edit(MID, C, True), {"price_values": vd.FAIL}, False),   # the agent reads true as 1.0; Kraken never sends it
-    "a negative open": (edit(MID, O, "-1"), {"price_values": vd.FAIL}, False),
-    "a zero high": (edit(MID, H, "0"), {"price_values": vd.FAIL}, False),
+    "a close of true": (edit(MID, C, True), {"price_values": vd.FAIL}, True),
+    "a negative open": (edit(MID, O, "-1"), {"price_values": vd.FAIL}, True),
+    "a zero high": (edit(MID, H, "0"), {"price_values": vd.FAIL}, True),
     "a vwap that is a word": (edit(MID, V, "n/a"), {"price_values": vd.FAIL}, False),
     "a negative vwap": (edit(MID, V, "-3"), {"price_values": vd.FAIL}, False),
     # ---- the day's range
-    "high below low": (lambda rows: rows[MID].__setitem__(H, "50.00") or rows[MID].__setitem__(L, "60.00") or rows, {"high_low_consistent": vd.FAIL}, False),
-    "close above high": (edit(MID, C, "999.00"), {"high_low_consistent": vd.FAIL}, False),
-    "open below low": (edit(MID, O, "1.00"), {"high_low_consistent": vd.FAIL}, False),
+    "high below low": (lambda rows: rows[MID].__setitem__(H, "50.00") or rows[MID].__setitem__(L, "60.00") or rows, {"high_low_consistent": vd.FAIL}, True),
+    "close above high": (edit(MID, C, "999.00"), {"high_low_consistent": vd.FAIL}, True),
+    "open below low": (edit(MID, O, "1.00"), {"high_low_consistent": vd.FAIL}, True),
     "vwap above high": (edit(MID, V, "999.00"), {"vwap_in_range": vd.FAIL, "high_low_consistent": vd.PASS}, False),
     "vwap below low": (edit(MID, V, "1.00"), {"vwap_in_range": vd.FAIL, "high_low_consistent": vd.PASS}, False),
     # ---- volume and trades
     "a negative volume": (edit(MID, VOL, "-1"), {"volume_trades_values": vd.FAIL}, True),
     "a volume that is a word": (edit(MID, VOL, "lots"), {"volume_trades_values": vd.FAIL}, True),
-    "a trade count with a decimal": (edit(MID, N, 3.5), {"volume_trades_values": vd.FAIL}, False),
-    "a negative trade count": (edit(MID, N, -4), {"volume_trades_values": vd.FAIL}, False),
-    "a trade count of true": (edit(MID, N, True), {"volume_trades_values": vd.FAIL}, False),
+    "a trade count with a decimal": (edit(MID, N, 3.5), {"volume_trades_values": vd.FAIL}, True),
+    "a negative trade count": (edit(MID, N, -4), {"volume_trades_values": vd.FAIL}, True),
+    "a trade count of true": (edit(MID, N, True), {"volume_trades_values": vd.FAIL}, True),
     # ---- unusual but possible: WARN
     "a day with no trading": (lambda rows: rows[MID].__setitem__(VOL, "0.0") or rows[MID].__setitem__(V, "0.0") or rows,
                               {"zero_volume_days": vd.WARN, "price_values": vd.PASS, "vwap_in_range": vd.PASS, "volume_trades_values": vd.PASS}, False),
@@ -195,7 +197,8 @@ class InjectedFaults(unittest.TestCase):
                 self.assertEqual(agent_rejects(mutate(good_rows())), refused, name)
 
     def test_faults_in_fields_the_agent_ignores_are_only_caught_by_the_validator(self):
-        for name in ("high below low", "vwap above high", "a negative trade count", "an open 10% away from the previous close", "a trade count with a decimal"):
+        for name in ("vwap above high", "vwap below low", "a negative vwap", "a vwap that is a word", "a day with no trading",
+                     "a 40% jump in one day", "an open 10% away from the previous close"):
             mutate, expected, refused = FAULTS[name]
             rows = mutate(good_rows())
             self.assertFalse(agent_rejects(rows), name)                 # the agent would carry on ...
@@ -344,7 +347,9 @@ class WholeReport(unittest.TestCase):
         with open(path, newline="", encoding="utf-8") as handle:
             rows = list(csv.DictReader(handle))
         self.assertEqual(list(rows[0]), ["coin", "check", "status", "detail", "what_it_catches"])
-        self.assertEqual({r["coin"] for r in rows}, {"BTC", "ETH", "XRP"})
+        self.assertEqual({r["coin"] for r in rows}, {"BTC", "ETH", "XRP", "ALL"})   # ALL: the check across coins
+        self.assertEqual(sum(1 for r in rows if r["coin"] == "ALL"), 1)
+        self.assertEqual(len(rows), 3 * 16 + 1)                                      # 16 checks per coin, one across coins
         self.assertTrue(all(r["what_it_catches"] for r in rows))
 
     def test_exit_code_is_0_when_there_are_only_warnings(self):

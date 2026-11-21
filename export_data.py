@@ -3,11 +3,13 @@
     python export_data.py              writes the files to ./data_export
     python export_data.py --out DIR    writes them to DIR
 
-Three files, all plain CSV (open them in Excel, Google Sheets or any editor):
+Four files, all plain CSV (open them in Excel, Google Sheets or any editor):
 
     kraken_candles.csv    every daily candle Kraken returns, all 8 values, for BTC, ETH and XRP
     daily_factors.csv     the numbers the agent calculates from the closes, for every completed day
-    columns_explained.csv one line per column of the two files above: where it comes from, what it means, whether the agent uses it
+    market_features.csv   the full market picture of every completed day (returns, volatility, trend, drawdown, tail risk,
+                          liquidity, link to Bitcoin, rank in the coin's own history, descriptive labels): see features.py
+    columns_explained.csv one line per column of the three files above: where it comes from, what it means, whether the agent uses it
 
 No AI and no tokens are used. The only network call is Kraken's public OHLC endpoint (no key), the same call the agent makes,
 through the same code (agent.fetch_rows and the same checks). Nothing is written when any coin fails.
@@ -20,11 +22,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import agent
+import features
 
 CANDLE_COLUMNS = ["coin", "kraken_pair", "date_utc", "time_unix", "open", "high", "low", "close", "vwap", "volume", "trades", "status"]
 FACTOR_COLUMNS = ["coin", "date_utc", "close", "volume", "daily_return_pct", "volume_vs_30d_avg_x", "volatility_30d_daily_pct",
                   "distance_from_30d_avg_pct", "max_drawdown_30d_pct", "rank_volatility", "rank_distance", "rank_drawdown",
                   "at_alert_rank"]
+FEATURE_COLUMNS = features.NAMES
 DICTIONARY_COLUMNS = ["file", "column", "comes_from", "meaning", "used_by_agent"]
 
 COMPLETED = "completed"
@@ -58,6 +62,10 @@ DICTIONARY = [
     ("daily_factors.csv", "rank_drawdown", "calculated", "The same rank for the 30-day drawdown", "yes"),
     ("daily_factors.csv", "at_alert_rank", "calculated", f"TRUE when any of the three ranks is {agent.ALERT_RANK:g} or higher. Only these days can start an alert", "yes"),
 ]
+
+# market_features.csv is described by features.COLUMNS, the one place that defines it, so the header and this file cannot drift apart.
+DICTIONARY += [("market_features.csv", name, features.comes_from(name), f"{meaning} ({unit})" if unit else meaning, features.used_by_agent(name))
+               for name, _group, unit, _digits, meaning in features.COLUMNS]
 
 
 def _number(value, digits):
@@ -114,7 +122,7 @@ def write_csv(path, header, rows):
 
 
 def export(out_dir, now=None):
-    """Fetches all coins first, then writes the three files. Raises (and writes nothing) when any coin fails."""
+    """Fetches all coins first, then writes the four files. Raises (and writes nothing) when any coin fails."""
     now = now or datetime.now(timezone.utc)
     raw = {coin: agent.fetch_rows(pair) for coin, pair in agent.WATCHLIST.items()}
     candles, factors = [], []
@@ -122,25 +130,29 @@ def export(out_dir, now=None):
         agent.parse_candles(rows, agent.WATCHLIST[coin])      # the agent's own row checks
         candles.extend(candle_rows(coin, rows, now))
         factors.extend(factor_rows(coin, rows, now))
+    market = features.build(raw, now)                         # raises on any bad candle before a file is written
+    feature_rows = [row for coin in raw for row in features.csv_rows(market[coin])]
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     write_csv(out / "kraken_candles.csv", CANDLE_COLUMNS, candles)
     write_csv(out / "daily_factors.csv", FACTOR_COLUMNS, factors)
+    write_csv(out / "market_features.csv", FEATURE_COLUMNS, feature_rows)
     write_csv(out / "columns_explained.csv", DICTIONARY_COLUMNS, DICTIONARY)
-    return {"candles": len(candles), "factors": len(factors), "dir": str(out)}
+    return {"candles": len(candles), "factors": len(factors), "features": len(feature_rows), "dir": str(out)}
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Save the Kraken data and the agent's factors as CSV files.")
-    parser.add_argument("--out", default="data_export", help="folder for the three CSV files (default: data_export)")
+    parser.add_argument("--out", default="data_export", help="folder for the four CSV files (default: data_export)")
     args = parser.parse_args(argv)
     try:
         result = export(args.out)
     except (RuntimeError, ValueError) as error:
         print(f"export failed, nothing written: {error}", file=sys.stderr)
         return 1
-    print(f"wrote {result['candles']} candle rows and {result['factors']} daily factor rows to {result['dir']}/ "
-          f"(kraken_candles.csv, daily_factors.csv, columns_explained.csv)")
+    print(f"wrote {result['candles']} candle rows, {result['factors']} daily factor rows and {result['features']} market feature rows "
+          f"({len(FEATURE_COLUMNS)} columns) to {result['dir']}/ "
+          f"(kraken_candles.csv, daily_factors.csv, market_features.csv, columns_explained.csv)")
     return 0
 
 

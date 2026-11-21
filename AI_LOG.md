@@ -1,6 +1,6 @@
 # AI log
 
-The five prompts that mattered most, and what the AI got wrong or I changed by hand.
+The prompts that mattered most, and what the AI got wrong or I changed by hand.
 
 This log records real events from the build sessions. Read it once and change anything that is not how it happened.
 
@@ -85,4 +85,42 @@ This log records real events from the build sessions. Read it once and change an
 - The first version of the factors file rounded prices to 4 decimals, which turned XRP's 0.95904 into 0.9590. The live run showed it, so prices and volumes now keep up to 12 significant digits and a test covers it.
 - A first check of the tests by breaking the code on purpose found one weak test: swapping two rank columns was not caught, because the sample data gave the same rank in both. The test now uses days where the three ranks differ, and checks that such days exist.
 - The Agent tab shows only the coins named in an alert, which looked like "2 coins instead of 3". That is how it was built, not a missing coin. The `market_data` tab has all three coins on every run.
+
+## 10. Checking that the Kraken data is correct
+
+**Prompt (in short):** check that the data fetched from Kraken is correct and authentic, and say exactly what was checked.
+
+**Result:** `validate_data.py` runs 16 checks per coin on the reply, the timestamps, the values, the warnings and an independent price comparison with CoinGecko. `tests/test_validate.py` injects the faults one at a time, now 43 of them. The live run found 47 PASS, 1 WARN and 0 FAIL. The WARN is XRP on 2025-03-02, a +34.3% day that is a real market event.
+
+**What the AI got wrong or I changed:**
+- Several of the first expectations of which faults the agent's own checks already refuse were wrong. The test now feeds every fault to the agent's own parser and records the answer, so the table in the README comes from a run and not from a guess.
+- Breaking the validator on purpose (letting a candle dated in the future through) made 2 tests fail. That is the proof the tests can fail.
+- The validator checks one coin at a time and had no check across coins. That gap is closed in entry 11.
+
+## 11. Fetch-data scenarios and a stricter data gate
+
+**Prompt (in short):** I shared 12 test scenarios for two coins (FD-01 to FD-12: negative trade count, high below low, close above high, wrong Kraken pair key, duplicate and out-of-order candles, missing date, valid BTC and ETH responses, future candle, BTC and ETH on different dates) and asked for all three coins to be covered with a strong traceability matrix whose coverage is measured.
+
+**Result:** `tests/test_fetch_data.py` has 45 scenarios (the 12 with my IDs and wording, 33 more), each run for BTC, ETH and XRP through the real fetch code, the agent's gate and the validator. The traceability matrix in the README is generated from those runs, and a test fails when the README is out of date. Coverage is measured with Python's own `trace` module: every executable line of the gate and the audit functions runs.
+
+**What the AI got wrong or I changed:**
+- The scenarios showed that the agent's own gate accepted six of my twelve faults on the daily path (a negative trade count, high below low, close above high, a duplicate or out-of-order unfinished candle, a candle dated in the future). Only the validator caught them, and the validator does not run before the daily alert. The agent's gate is now stricter and refuses all six. This changes what the daily run accepts, so the pull request waits for a successful daily run.
+- There was no rule that BTC, ETH and XRP end on the same day (FD-12). The agent now refuses it, and the validator has a matching check, `coins_same_dates`, reported once across the coins.
+- The first measured coverage was below 100%. The trace named the lines that no scenario reached, and FD-36 to FD-45 were added for them (a close that is a word or `true`, the real CoinGecko reply with malformed points, a reply with no prices, the other coins unavailable).
+- The coverage tool most people use (`coverage`) is not installed here, and I did not install it without asking, so the measurement uses the standard library.
+- Six deliberate breaks of the gate were each caught, by the scenarios that trace to that rule. Re-running four of them with bytecode caching off gave the same answer.
+
+## 12. All the useful columns from Kraken, and the live-analysis framing
+
+**Prompt (in short):** the Kraken CSV should carry every important and potential column that helps market analysis, not only basic factors: think as a data scientist and a trader who wants every risk, alert and warning visible. A second message said not to stay inside the "education only" boundary and to treat the project as live market analysis.
+
+**Result:** `features.py` builds 87 columns per coin per completed day from Kraken's 8 values, and `export_data.py` writes them to `market_features.csv`. They cover returns, candle shape, volatility (including the Parkinson and Garman-Klass estimators), trend and momentum, drawdown, tail risk, liquidity, the link to Bitcoin, ranks against the coin's own history and descriptive labels. Every column is explained in `columns_explained.csv`, which is generated from the same list, so the two cannot drift apart. The README now describes the project as live market analysis and decision support, with "not investment advice" kept.
+
+**What the AI got wrong or I changed:**
+- The agent still does not give buy or sell instructions, and the advice filter stays. The alert rank fires on about 8 to 14% of days and has no test of forward predictive power, so an instruction built on it would claim more than the evidence shows. What the agent gives instead is the risk picture, warnings, alerts and what would change the view. A separate, labelled "market view" field is possible if I ask for it.
+- My first RSI check used a table of values from memory and differed from the formula by 0.03 to 0.07 on every day. I could not tell whether the table or the formula was wrong, so I compared the columns with pandas, numpy and scipy instead: 133 comparisons, largest relative difference 3e-13. Those libraries were already in the sandbox and are not project dependencies.
+- The export test found a real mismatch: my own 30-day average distance had a value on day 30 where the agent's has none until day 31. The three alert metrics now come from the agent's own functions, so the file cannot disagree with the agent.
+- One of my tests expected a blank rank where a value is correct (it needs 90 days of the range, not 120), so the test was corrected, not the code.
+- Mutation testing found two formulas the tests did not pin (one term of the true range, and the sign of a flat day in the signed volume balance). Two tests were added, and all 14 breaks are now caught.
+- My own mutation script left a stale compiled file (a break of the same size, written within the same second), which made a correct test look broken. I re-ran with bytecode caching off.
 

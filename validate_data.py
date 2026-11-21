@@ -11,6 +11,8 @@ What is checked, for each of BTC, ETH and XRP (every check has a plain-language 
                    volume is not negative, the trade count is a whole number
   warnings         zero-volume days, daily moves above 30%, an open more than 5% away from the previous close
   independence     the latest closes against CoinGecko's price, a second and unrelated source (needs the free Demo key)
+and once across the coins:
+  alignment        BTC, ETH and XRP end on the same day, so a cross-asset number never compares different days
 
 FAIL means the data is wrong and must not be trusted. WARN means unusual but possible (a real crash looks like this).
 SKIP means the check could not be made (no key, source down, or an earlier FAIL made it meaningless). The exit code is 1 when any
@@ -59,6 +61,7 @@ COVERS = {
     "zero_volume_days": "A completed day with no trading at all (a gap in the exchange data)",
     "extreme_daily_moves": f"A close more than {BIG_MOVE_PCT:g}% away from the previous close (a real crash, or a wrong price)",
     "open_vs_previous_close": f"An open more than {GAP_TO_PREVIOUS_CLOSE_PCT:g}% away from the previous close (a missing or wrong candle)",
+    "coins_same_dates": "One coin ending on a different day than the others (the coins would be compared on the wrong dates)",
     "coingecko_agreement": f"Kraken closes that disagree with CoinGecko by more than {AGREE_PCT:g}% (WARN) or {DISAGREE_PCT:g}% (FAIL): wrong pair, wrong unit or wrong value",
 }
 
@@ -178,6 +181,22 @@ def check_rows(coin, rows, now):
     return out
 
 
+def check_coins_aligned(rows_by_coin, now):
+    """All coins must end on the same completed day. Reported once, under the name ALL."""
+    today = int(now.timestamp()) // DAY * DAY
+    newest = {}
+    for coin, rows in rows_by_coin.items():
+        stamps = [r[0] for r in rows if isinstance(rows, list) and isinstance(r, (list, tuple)) and len(r) == 8
+                  and is_whole(r[0]) and EARLIEST <= r[0] < today and r[0] % DAY == 0]
+        if stamps:
+            newest[coin] = max(stamps)
+    if len(newest) < 2:
+        return result("ALL", "coins_same_dates", SKIP, "fewer than two coins have usable completed candles to compare")
+    if len(set(newest.values())) == 1:
+        return result("ALL", "coins_same_dates", PASS, f"all {len(newest)} coins end on {label(next(iter(newest.values())))}")
+    return result("ALL", "coins_same_dates", FAIL, "coins end on different days: " + ", ".join(f"{coin} {label(end)}" for coin, end in newest.items()))
+
+
 def coingecko_prices(body):
     """{UTC date text: price} for CoinGecko points stamped exactly 00:00 UTC, which is the price at the end of the day before.
     Anything that is not a list of [milliseconds, price] pairs is skipped, never guessed."""
@@ -242,6 +261,7 @@ def validate(raw_by_coin, now, coingecko_by_coin=None, errors=None):
         report.append(result(coin, "kraken_reply", PASS, f"{agent.WATCHLIST[coin]} answered with the expected pair key"))
         report.extend(check_rows(coin, rows, now))
         report.append(check_against_coingecko(coin, rows, (coingecko_by_coin or {}).get(coin), now))
+    report.append(check_coins_aligned({c: r for c, r in raw_by_coin.items() if not (errors and c in errors)}, now))
     return report
 
 

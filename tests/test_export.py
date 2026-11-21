@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import agent  # noqa: E402
 import export_data  # noqa: E402
+import features  # noqa: E402
 
 DAY = 86400
 NOW = datetime(2026, 11, 20, 12, 0, tzinfo=timezone.utc)
@@ -58,17 +59,34 @@ class Export(unittest.TestCase):
             self.result = export_data.export(self.out, NOW)
         self.candles = read(self.out / "kraken_candles.csv")
         self.factors = read(self.out / "daily_factors.csv")
+        self.features = read(self.out / "market_features.csv")
 
-    def test_three_files_with_the_documented_columns(self):
-        for name in ("kraken_candles.csv", "daily_factors.csv", "columns_explained.csv"):
+    def test_four_files_with_the_documented_columns(self):
+        for name in ("kraken_candles.csv", "daily_factors.csv", "market_features.csv", "columns_explained.csv"):
             self.assertTrue((self.out / name).exists(), name)
         self.assertEqual(list(self.candles[0].keys()), export_data.CANDLE_COLUMNS)
         self.assertEqual(list(self.factors[0].keys()), export_data.FACTOR_COLUMNS)
+        self.assertEqual(list(self.features[0].keys()), features.NAMES)
 
     def test_row_counts_include_the_unfinished_day_in_candles_only(self):
         self.assertEqual(len(self.candles), 3 * (DONE_DAYS + 1))
         self.assertEqual(len(self.factors), 3 * DONE_DAYS)
-        self.assertEqual(self.result, {"candles": 3 * (DONE_DAYS + 1), "factors": 3 * DONE_DAYS, "dir": str(self.out)})
+        self.assertEqual(len(self.features), 3 * DONE_DAYS)
+        self.assertEqual(self.result, {"candles": 3 * (DONE_DAYS + 1), "factors": 3 * DONE_DAYS, "features": 3 * DONE_DAYS, "dir": str(self.out)})
+
+    def test_the_features_file_agrees_with_the_factors_file_on_every_shared_column(self):
+        shared = {"coin": "coin", "date_utc": "date_utc", "close": "close", "volume": "volume", "ret_1d_pct": "daily_return_pct",
+                  "volume_vs_30d_avg_x": "volume_vs_30d_avg_x", "vol_30d_pct": "volatility_30d_daily_pct",
+                  "dist_sma30_pct": "distance_from_30d_avg_pct", "max_drawdown_30d_pct": "max_drawdown_30d_pct",
+                  "rank_vol_30d": "rank_volatility", "rank_dist_30d": "rank_distance", "rank_drawdown_30d": "rank_drawdown",
+                  "at_alert_rank": "at_alert_rank"}
+        self.assertEqual(len(self.features), len(self.factors))
+        for mine, theirs in zip(self.features, self.factors):
+            for new, old in shared.items():
+                if new in ("close", "volume", "coin", "date_utc", "at_alert_rank") or mine[new] == theirs[old] == "":
+                    self.assertEqual(mine[new], theirs[old], (new, mine["coin"], mine["date_utc"]))
+                else:
+                    self.assertAlmostEqual(float(mine[new]), float(theirs[old]), delta=0.0002, msg=(new, mine["coin"], mine["date_utc"]))
 
     def test_all_eight_kraken_values_are_kept_exactly_as_received(self):
         first = [r for r in self.candles if r["coin"] == "BTC"][0]
@@ -154,7 +172,8 @@ class Export(unittest.TestCase):
         self.assertEqual(list(explained[0].keys()), export_data.DICTIONARY_COLUMNS)
         pairs = [(r["file"], r["column"]) for r in explained]
         self.assertEqual(len(pairs), len(set(pairs)))
-        wanted = {("kraken_candles.csv", c) for c in export_data.CANDLE_COLUMNS} | {("daily_factors.csv", c) for c in export_data.FACTOR_COLUMNS}
+        wanted = ({("kraken_candles.csv", c) for c in export_data.CANDLE_COLUMNS} | {("daily_factors.csv", c) for c in export_data.FACTOR_COLUMNS}
+                  | {("market_features.csv", c) for c in features.NAMES})
         self.assertEqual(set(pairs), wanted)
         for row in explained:
             self.assertTrue(all(row[k].strip() for k in export_data.DICTIONARY_COLUMNS), row)

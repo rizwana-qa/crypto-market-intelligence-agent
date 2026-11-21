@@ -102,9 +102,10 @@ def actions(f):
     if links.get("ask_url"):
         ask = ("Ask the playbook", "Ask a question and get the matching playbook rules, with the section cited.", _button("Ask the playbook", links["ask_url"]))
     else:
-        ask = ("Ask the playbook: runs on your computer",
-               f'This is not a web link, so it cannot open from an email. In your crypto-watch-agent folder, double-click {links["launcher"]} '
-               "(or run python rag_server.py). Your browser opens the Ask page. A Groq key is optional: without it the page shows the matching playbook text.", "")
+        ask = ("Ask the playbook: a tab in the attached report",
+               "Open the attached report and click the Ask the playbook tab. Type a question and it shows the matching playbook rules, word for word. "
+               "It needs no server and no key, and no AI is used. "
+               f'For answers written by the AI, double-click {links["launcher"]} in your crypto-watch-agent folder (or run python rag_server.py).', "")
     panels = "".join(
         f'<tr><td height="10" style="font-size:0;line-height:0">&nbsp;</td></tr><tr><td bgcolor="{PANEL}" style="padding:14px 16px;background:{PANEL};border-left:3px solid {AMBER}">'
         f'<div style="font-size:14px;font-weight:700;color:{TEXT};{FONT}">{esc(title)}</div>'

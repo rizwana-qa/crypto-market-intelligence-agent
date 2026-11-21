@@ -230,7 +230,7 @@ class Links(unittest.TestCase):
         self.assertNotIn("127.0.0.1", html)
         self.assertNotIn("href=", html)
         self.assertIn("attached to this email", html)
-        self.assertIn("not a web link", html)
+        self.assertIn("click the Ask the playbook tab", html)
         self.assertIn(report.LAUNCHER, html)
 
     def test_a_published_address_becomes_a_button(self):
@@ -239,7 +239,7 @@ class Links(unittest.TestCase):
         self.assertIn('href="https://example.github.io/crypto-watch/ask.html"', html)
         self.assertIn("Open the interactive report", html)
         self.assertIn("Ask the playbook", html)
-        self.assertNotIn("not a web link", html)
+        self.assertNotIn("click the Ask the playbook tab", html)
 
     def test_only_https_addresses_without_markup_characters_are_accepted(self):
         for bad in ("http://example.com/x", "javascript:alert(1)", "https://x.example/a b", 'https://x.example/"onmouseover="x', "https://x.example/<b>", "", "   ", "https://" + "a" * 400):
@@ -248,14 +248,14 @@ class Links(unittest.TestCase):
         with mock.patch.dict(os.environ, {"ASK_URL": " https://ok.example/ask "}):
             self.assertEqual(report.public_url("ASK_URL"), "https://ok.example/ask")
 
-    def test_the_page_link_is_local_only_when_nothing_is_published(self):
-        with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("ASK_URL", None)
-            self.assertIn(report.RAG_URL, report.ask_link())
-            self.assertIn(report.LAUNCHER, report.ask_link())
-        with mock.patch.dict(os.environ, {"ASK_URL": "https://example.org/ask"}):
-            self.assertIn('href="https://example.org/ask"', report.ask_link())
-            self.assertNotIn("127.0.0.1", report.ask_link())
+    def test_the_page_link_opens_the_ask_tab_in_the_same_file(self):
+        for env in ({}, {"ASK_URL": "https://example.org/ask"}):
+            with mock.patch.dict(os.environ, env, clear=False):
+                if not env:
+                    os.environ.pop("ASK_URL", None)
+                link = report.ask_link()
+                self.assertIn('href="#ask"', link)
+                self.assertNotIn("127.0.0.1", link)
 
 
 class Size(unittest.TestCase):

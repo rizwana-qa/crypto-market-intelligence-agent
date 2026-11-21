@@ -9,6 +9,9 @@ on:
       - "scenarios.py"
       - "report.py"
       - "emailbody.py"
+      - "asktab.py"
+      - "rag_static.js"
+      - "rag_tab.js"
       - "start_ask_page.bat"
       - "insights.py"
       - "rag.py"
@@ -85,6 +88,9 @@ jobs:
 
       - name: Ask page tests (retrieval, answer guardrails, local server) (offline)
         run: python tests/test_rag.py -v
+
+      - name: Ask tab tests (the browser engine must answer exactly like rag.py) (offline)
+        run: python tests/test_asktab.py -v
 
       - name: Sources tests (offline)
         run: python tests/test_sources.py -v

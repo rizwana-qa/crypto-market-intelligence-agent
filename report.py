@@ -26,6 +26,7 @@ import sys
 from datetime import datetime, timezone
 
 import agent
+import asktab
 import emailbody
 import insights
 import sources
@@ -603,7 +604,6 @@ footer .by .credit{font-size:18px}
 @media print{body{background:#fff;color:#111}.track{animation:none}.card,.tile,.hl,.score,.panel{break-inside:avoid}}
 """
 
-RAG_URL = "http://127.0.0.1:8765/"      # the local Ask page: start_ask_page.bat or python rag_server.py
 ATTACHMENT_NAME = "crypto-watch-executive-brief.html"
 LAUNCHER = "start_ask_page.bat"
 
@@ -729,12 +729,8 @@ def brand_bar(data, as_of):
 
 
 def ask_link():
-    """The Ask page link. A published address (ASK_URL) works from anywhere; the local one only while python rag_server.py is running."""
-    hosted = public_url("ASK_URL")
-    if hosted:
-        return f'<a href="{esc(hosted)}">Ask the playbook &rarr;</a>'
-    return (f'<a href="{RAG_URL}" title="Runs on your computer only: double-click {LAUNCHER} (or run python rag_server.py), then this link opens">'
-            'Ask the playbook &rarr;</a>')
+    """The brand-bar link: opens the Ask tab inside this same file (no server, no key, no AI)."""
+    return asktab.link()
 
 
 def ticker_items(data):
@@ -1345,10 +1341,11 @@ def build_html(data):
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Crypto Watch: Executive Intelligence Brief</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link href="{FONTS_URL}" rel="stylesheet">
-<style>{CSS}</style></head><body>
+<style>{CSS}{asktab.CSS}</style></head><body>
 {brand_bar(data, as_of)}
 {ticker(data)}
-<main class="wrap">
+{asktab.tab_bar()}
+<main class="wrap" id="panel-report" role="tabpanel" aria-labelledby="tab-report">
 {hero(data, as_of)}
 {top3_section(data)}
 {stat_tiles(data)}
@@ -1370,8 +1367,10 @@ def build_html(data):
 <span><span class="chip ai">Written by AI</span> the analysis text</span>
 <span><span class="chip check">Checked by code</span> guardrails on the AI's decision</span></div></section>
 </main>
+{asktab.panel()}
 {footer_html()}
-{chart_script(charts(data))}</body></html>"""
+{chart_script(charts(data))}
+{asktab.script()}</body></html>"""
 
 
 # ------------------------------------------------------------------------------------------------

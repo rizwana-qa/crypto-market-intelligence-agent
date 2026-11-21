@@ -168,3 +168,18 @@ This log records real events from the build sessions. Read it once and change an
 - My advice-word test flagged "recommends" in an intro sentence of mine, and "recommendation" in the disclaimer that says there is none. I reworded the sentence and excluded only the disclaimer from the scan.
 - Not done: the email has not been seen in Gmail, Outlook or a phone app. I rendered it in Chrome at 700 px and 375 px from demo data and from the real Kraken candles. Outlook for Windows and Gmail's dark mode can change colours and spacing.
 
+
+
+## 16. The Ask tab inside the HTML report
+
+**Prompt (in short):** the report cannot be combined with the Ask page: I want one HTML file where I can switch to an Ask tab and use the RAG there.
+
+**Result:** the report now has two tabs, Report and Ask the playbook. The Ask tab searches the 18 playbook sections and shows their own words, with no server, no key and no AI, so the file is safe to forward and works from the email attachment. `rag_static.js` is a port of the retrieval half of `rag.py`; `asktab.py` hands it the same constants, stopwords, synonyms, advice pattern and sections; `rag_tab.js` holds the tab and form code. AI-written answers stay on the local page, because a Groq key must never go into a file that can be forwarded. The email's Ask panel now points to the tab.
+
+**What the AI got wrong or I changed:**
+- My first plan reused the whole local page inside an iframe. I dropped it: the local server's Content-Security-Policy (`default-src 'none'`) could get in its way, and a second copy of the page would have to be kept in step. The tab is built natively in the report instead.
+- A port can drift from the original, so `tests/test_asktab.py` runs both engines on 80 questions (answers, ranked sections, scores, terms, quotes) and requires the same result. Two deliberate breaks (a changed stemmer suffix list, a changed digit rule) were each caught.
+- The Python code splits sentences with a regex look-behind. Older Safari cannot parse that, and a parse error would stop the whole script on an iPhone. The port splits another way, and a test bans look-behind, optional chaining and `??` in the tab's code.
+- The best match for "When does the agent raise an alert?" shows a weak one-line quote ("They never raise an alert on their own."), because the quote is the sentence that shares most words with the question. The tab now shows the best section in full, open. The quote rule itself is unchanged, because the parity test needs it to match `rag.py`.
+- Browser behaviour (switching tabs, asking, the declined request, text such as `<img onerror>` shown as text, charts the right width after switching back, opening at `#ask`) was checked by me in Chrome at 1440 px and 390 px. It is not part of the automatic tests.
+- Not done: the tab has not been seen on a real phone or in Safari. The charts still load plotly.js from a CDN. The tab gives the playbook's wording, not a written answer.

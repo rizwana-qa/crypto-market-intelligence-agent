@@ -428,7 +428,7 @@ All in code, applied after the AI answers.
 
 ## Testing
 
-### Offline tests: 426, no AI and no network
+### Offline tests: 428, no AI and no network
 
 A scripted AI gives the same answers every time, so these are exact. `python tests/<file> -v` runs each one, and the `Tests` workflow runs all twelve on every push that changes code or the playbook.
 
@@ -436,7 +436,7 @@ A scripted AI gives the same answers every time, so these are exact. `python tes
 |---|---|---|
 | `tests/test_guardrails.py` | 63 | The agent loop, planner, reviewer and every guardrail, with hand-calculated metrics |
 | `tests/test_context.py` | 34 | The new metrics, the rule that context never alerts alone, the Sheet tab widths against `Code.gs` |
-| `tests/test_report.py` | 41 | The executive brief: numbers, trigger levels (each level is put in as the next close and the metric recomputed, and it lands on the target), labelling of who wrote what, the top 3 headlines on the page, the credit line, charts, the email and its subject |
+| `tests/test_report.py` | 43 | The executive brief: numbers, trigger levels (each level is put in as the next close and the metric recomputed, and it lands on the target), labelling of who wrote what, the top 3 headlines on the page, the credit line, charts, the email and its subject |
 | `tests/test_emailbody.py` | 28 | The email body: well-formed tables, nothing a mail program strips, contrast, escaping, the AI block on a no-alert day, links only when real, the size budget and section dropping, the fallback to the older web app, the launcher |
 | `tests/test_insights.py` | 18 | The event study checked by hand on small series, the exact top 3 headlines and subject lines for the 20 November numbers, no advice word in any subject (a forced bad phrase falls back to a plain count) |
 | `tests/test_rag.py` | 53 | The Ask page: all retrieval checks, the guardrails on scripted AI answers (invented section, section not retrieved, advice wording, bad JSON, failed call), declined requests never reach the AI, and the local server (Host, Origin, content type, size, rate limit, no key in any reply, no text into HTML) |
@@ -489,7 +489,7 @@ What has been proved, and how. Dates are 2026-11-21 unless stated.
 
 | What | Status | Evidence |
 |---|---|---|
-| 426 offline tests | Pass locally. The `Tests` workflow runs them on every code push | Local runs |
+| 428 offline tests | Pass locally. The `Tests` workflow runs them on every code push | Local runs |
 | Each free source on live data | Verified, all five context sources answered for all three coins | [44842220066](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44842220066), depth fix [44842558674](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44842558674) |
 | Kraken data export and factors on live data | Verified | [44848783647](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44848783647) |
 | Data validation on live data | Verified: 47 PASS, 1 WARN (real event), 0 FAIL. With the cross-coin check: 49 checks, 48 PASS, 1 WARN, 0 FAIL | [44849463885](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44849463885), [44852768752](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44852768752) |
@@ -535,6 +535,16 @@ The five finished scenarios cost 116,419 tokens, about 23,000 each. A calm scena
 | 2 | 10, 14, 11, 3, 8, 12 | Real breaches first: a multi-coin sell-off (10), a new coin after a repeat alert (14), a single coin (11), repeat-alert suppression (3), volume without a price move (8), a correlation breakdown (12) | about 130,000 (estimate) |
 | 3 | 13, 16, 15, 4, 5, 2 | XRP relative-strength outlier (13), cross-asset data missing (16), instruction hidden in text (15), Kraken outage (4), advice trap (5), the plain spike (2) | about 130,000 (estimate) |
 | 4 | 1, 6, 7 | Calm, one coin down, near threshold: passed with four tools, re-run with six | about 45,000 (estimate) |
+
+**Plan for the three versions with no real-AI result yet** (Agent loop + reviewer, Planner, Planner + reviewer). All three are implemented and pass their offline tests with a scripted AI. What is missing is a run with the real AI. One version per day, started by hand (Actions > Tests > Run workflow), with `only` set to `2,5,14,15`:
+
+| Day | `mode` | `reviewer` | Result goes in |
+|---|---|---|---|
+| A | agent | on | the Agent loop + reviewer row |
+| B | planner | off | the Planner row (replaces the 6 of 7 from before the fix) |
+| C | planner | on | the Planner + reviewer row |
+
+Why these four scenarios. Scenario 3 (a repeat alert) no longer separates the versions, because the code now blocks that case whatever the AI says. Scenario 2 is the plain spike (a baseline), 5 is the advice trap, 14 is a new coin after a repeat alert (the code leaves a mixed alert to the AI, so this is where the AI can still get it wrong), and 15 is an instruction hidden in text. A reviewer version makes one more AI call per scenario, and a revision makes another. The measured average is about 23,000 tokens for a scenario with the plain loop, so four scenarios are about 90,000 tokens, and I estimate 100,000 to 130,000 with a reviewer or a planner. The reviewer and planner cost has not been measured, so the first run is also the measurement. Start a run only when the Groq usage page shows at least 150,000 tokens free, which keeps about 30,000 for the daily run. Nothing in the results table changes until a run has finished and its link is added.
 
 Run a batch with `python agent.py --test --only 10,14,11,3,8,12 --publish`, or in GitHub: Actions > Tests > Run workflow, with the `only` list and `publish` ticked. Every result goes to the `scenarios` tab, including a scenario that did not finish.
 
@@ -657,6 +667,7 @@ Things only the author can supply, or that wait on a run. Everything else in thi
 - [ ] The hand check in Google Sheets: download the 31 BTC closes, recalculate the volatility with `=STDEV.S(...)` on the 30 daily returns, and compare with the agent's number (2.3465 for 2026-11-20).
 - [ ] Optional: run `python calibrate.py` on your own computer and compare its table with the backtest above.
 - [ ] The first daily run with all six tools on live data: add its link and result to the Verification status row, and check that the `market_data`, `cross_asset` and `context_data` tabs received rows.
+- [ ] Real-AI runs of Agent loop + reviewer, Planner and Planner + reviewer (scenarios 2, 5, 14, 15, one version a day, see Token budget): add each run link to the Verification status and Results tables.
 - [ ] The full `--measure` table, or one line saying it was not run on the free tier.
 - [ ] Confirm or rewrite the conclusion in your own words after the day 2 to 4 scenario batches.
 - [ ] The repository link in the submission.

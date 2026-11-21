@@ -254,6 +254,24 @@ class Presentation(unittest.TestCase):
         self.assertIn("Distance: close above", section)
         self.assertEqual(section.count("last $"), len(report.good(data)))
 
+    def test_every_scoreboard_row_has_the_same_cells_so_the_columns_line_up(self):
+        data = make_data()
+        board = report.scoreboard(data)
+        rows = re.findall(r'<div class="srow">(.*?)</dl></div>', board, flags=re.S)
+        self.assertEqual(len(rows), len(report.good(data)))
+        for row in rows:
+            self.assertEqual(row.count("<dt>"), len(agent.METRICS))
+            self.assertEqual(row.count('<dd class="v">'), len(agent.METRICS))
+            self.assertEqual(row.count('<dd class="r">'), len(agent.METRICS))
+            self.assertEqual(row.count('class="who"'), 1)
+
+    def test_the_scoreboard_adapts_to_the_card_width_not_to_the_screen_width(self):
+        css = report.CSS
+        self.assertIn("container:score/inline-size", css)
+        self.assertIn("@container score (min-width:", css)
+        # The default (narrow) layout must not need container query support to stay inside the card.
+        self.assertIn(".srow{display:grid;grid-template-columns:minmax(0,1fr)", css)
+
     def test_the_relationship_flags_are_one_headline(self):
         lines = [x for x in report.headlines(make_data()) if x.startswith("Unusual relationships")]
         self.assertEqual(len(lines), 1)

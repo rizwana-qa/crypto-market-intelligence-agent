@@ -178,7 +178,8 @@ class ApprovedPathIsUnchanged(ReviewerCase):
 
     def test_the_reviewer_off_path_is_untouched(self):
         decision, _ = self.decide([tool_calls(), say(CLEAN)], reviewer=False)
-        self.assertEqual(set(decision), {"alert", "coins", "message", "sources", "reasoning", "blocked_reason"})
+        # "check" and "code_breaches" are added by fix D-02 (the code's own breach check); they stay out of the Sheet payload.
+        self.assertEqual(set(decision), {"alert", "coins", "message", "sources", "reasoning", "blocked_reason", "check", "code_breaches"})
         self.assertEqual([line for line in self.logs if "REVIEW" in line], [])
 
 

@@ -107,6 +107,77 @@ class Guardrails(QuietCase):
         self.assertEqual(result["sources"], ["Alert rules"])
 
 
+class RepeatGuard(QuietCase):
+    """The playbook's Repeat alerts rule, enforced in code: no alert again for a coin that the last 7 decisions already alerted."""
+    XRP = {"tool": "get_market_summary", "args": {"coin": "XRP"}, "result": {"coin": "XRP", "ranks": {}, "breaches": ["volatility"]}}
+
+    @staticmethod
+    def history(*decisions, **result):
+        return {"tool": "get_recent_decisions", "args": {}, "result": result or {"decisions": list(decisions)}}
+
+    def run_guard(self, history, **changes):
+        evidence = GOOD_MARKET + [RepeatGuard.XRP] + ([history] if history is not None else [])
+        return agent.apply_guardrails(draft(**changes), TITLES, evidence)
+
+    def test_a_coin_alerted_in_the_recent_decisions_is_not_alerted_again(self):
+        result = self.run_guard(self.history({"alert": True, "coins": ["BTC"]}))
+        self.assertFalse(result["alert"])
+        self.assertIn("already alerted", result["blocked_reason"])
+        self.assertIn("BTC", result["blocked_reason"])
+        self.assertEqual((result["message"], result["coins"]), ("", []))
+
+    def test_a_coin_that_was_not_alerted_may_alert(self):
+        result = self.run_guard(self.history({"alert": True, "coins": ["BTC"]}), coins=["XRP"], message="XRP 30-day daily volatility rank is 99.1.")
+        self.assertTrue(result["alert"])
+
+    def test_an_alert_that_holds_one_new_coin_is_left_to_the_ai(self):
+        result = self.run_guard(self.history({"alert": True, "coins": ["BTC"]}), coins=["BTC", "XRP"])
+        self.assertTrue(result["alert"])
+
+    def test_decisions_without_an_alert_do_not_count(self):
+        self.assertTrue(self.run_guard(self.history({"alert": False, "coins": []}, {"alert": False, "coins": ["BTC"]}))["alert"])
+
+    def test_no_history_or_unreadable_history_does_not_block(self):
+        self.assertTrue(self.run_guard(None)["alert"])
+        self.assertTrue(self.run_guard(self.history(error="history unavailable: the Sheet web app refused the request"))["alert"])
+        for result in ({"decisions": None}, {"decisions": "BTC"}, {"decisions": ["BTC", 7, None]}, {"decisions": [{"alert": True, "coins": "BTC"}]},
+                       {"decisions": [{"alert": "TRUE", "coins": ["BTC"]}]}):
+            self.assertTrue(self.run_guard(self.history(**result))["alert"], result)
+
+    def test_coin_names_are_compared_ignoring_case_and_spaces(self):
+        self.assertFalse(self.run_guard(self.history({"alert": True, "coins": [" btc "]}))["alert"])
+
+    def test_only_the_last_seven_decisions_count(self):
+        quiet = {"alert": False, "coins": []}
+        old_alert = [{"alert": True, "coins": ["BTC"]}] + [quiet] * agent.HISTORY_LIMIT
+        self.assertTrue(self.run_guard(self.history(*old_alert))["alert"])
+        recent_alert = [quiet] * (agent.HISTORY_LIMIT - 1) + [{"alert": True, "coins": ["BTC"]}]
+        self.assertFalse(self.run_guard(self.history(*recent_alert))["alert"])
+
+    def test_the_check_does_not_touch_a_decision_that_is_not_an_alert(self):
+        result = self.run_guard(self.history({"alert": True, "coins": ["BTC"]}), alert=False, coins=[], message="", sources=["Alert rules"])
+        self.assertEqual(result["blocked_reason"], "")
+
+    def test_the_history_is_fetched_by_the_code_when_the_ai_did_not_ask_for_it(self):
+        history = [{"time": "2026-11-18T05:17:02Z", "alert": True, "coins": ["BTC"], "message": "x", "sources": ["Volatility rule"]}]
+        tools = scenarios.fake_tools(scenarios.btc_spike(scenarios.calm()), history)
+        replies = [tool_call_message(("get_market_summary", {"coin": "BTC"}), ("get_market_summary", {"coin": "ETH"}), ("get_market_summary", {"coin": "XRP"})),
+                   text_message(final_json(sources=["Volatility rule", "Alert rules"]))]
+        with mock.patch.object(agent, "call_llm", side_effect=replies):
+            decision, evidence = agent.decide("agent", False, tools)
+        self.assertIn("get_recent_decisions", [e["tool"] for e in evidence])
+        self.assertFalse(decision["alert"])
+        self.assertIn("already alerted", decision["blocked_reason"])
+
+    def test_a_first_alert_with_an_empty_history_still_goes_out(self):
+        tools = scenarios.fake_tools(scenarios.btc_spike(scenarios.calm()), [])
+        replies = [tool_call_message(("get_market_summary", {"coin": "BTC"}), ("get_market_summary", {"coin": "ETH"}), ("get_market_summary", {"coin": "XRP"})),
+                   text_message(final_json(sources=["Volatility rule", "Alert rules"]))]
+        with mock.patch.object(agent, "call_llm", side_effect=replies):
+            decision, _ = agent.decide("agent", False, tools)
+        self.assertTrue(decision["alert"])
+
+
 class AnswerShape(unittest.TestCase):
     def test_valid_json_is_accepted_even_inside_a_code_fence(self):
         parsed = agent.parse_decision("```json\n" + final_json(coins=["btc"]) + "\n```")

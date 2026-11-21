@@ -420,6 +420,7 @@ All in code, applied after the AI answers.
 | A plan is validated before anything runs; one retry, then the run stops | `validate_plan`, `make_plan` | `test_every_kind_of_bad_plan_is_refused`, `test_planner_stops_after_a_second_bad_plan` |
 | A broken reviewer reply never blocks the job, and the guardrails still apply after it | `review_draft` | `test_a_broken_reviewer_reply_never_blocks_the_job`, `test_code_guardrails_still_apply_after_a_reviewer_that_approves_everything` |
 | **Context never alerts alone.** Every coin in an alert needs its own price rank at or above the alert rank in this run's market data | `apply_guardrails` | `NoAlertOnContextAlone` in `tests/test_context.py` |
+| **No repeat alert.** An alert is blocked when every coin in it was already alerted in the last 7 decisions (the playbook's Repeat alerts rule). An alert that holds at least one coin not alerted recently is left to the AI. If the AI did not ask for the history, the code reads it. If the history cannot be read, nothing is blocked | `apply_guardrails`, `recently_alerted_coins`, `decide` | `RepeatGuard` in `tests/test_guardrails.py` (10 tests, 3 deliberate breaks each caught) |
 | The web app writes only to four named extra tabs, with a fixed header and row width, and text that starts with = + - @ is escaped | `append_`, `cell_` in `Code.gs` | `SheetTabs` in `tests/test_context.py` (row widths against the `Code.gs` headers) |
 | The Sheet key never appears in an error message or log | `redact` | `Delivery.test_the_key_never_appears_in_an_error` |
 
@@ -427,13 +428,13 @@ All in code, applied after the AI answers.
 
 ## Testing
 
-### Offline tests: 416, no AI and no network
+### Offline tests: 426, no AI and no network
 
 A scripted AI gives the same answers every time, so these are exact. `python tests/<file> -v` runs each one, and the `Tests` workflow runs all twelve on every push that changes code or the playbook.
 
 | File | Tests | What it proves |
 |---|---|---|
-| `tests/test_guardrails.py` | 53 | The agent loop, planner, reviewer and every guardrail, with hand-calculated metrics |
+| `tests/test_guardrails.py` | 63 | The agent loop, planner, reviewer and every guardrail, with hand-calculated metrics |
 | `tests/test_context.py` | 34 | The new metrics, the rule that context never alerts alone, the Sheet tab widths against `Code.gs` |
 | `tests/test_report.py` | 41 | The executive brief: numbers, trigger levels (each level is put in as the next close and the metric recomputed, and it lands on the target), labelling of who wrote what, the top 3 headlines on the page, the credit line, charts, the email and its subject |
 | `tests/test_emailbody.py` | 28 | The email body: well-formed tables, nothing a mail program strips, contrast, escaping, the AI block on a no-alert day, links only when real, the size budget and section dropping, the fallback to the older web app, the launcher |
@@ -488,7 +489,7 @@ What has been proved, and how. Dates are 2026-11-21 unless stated.
 
 | What | Status | Evidence |
 |---|---|---|
-| 416 offline tests | Pass locally. The `Tests` workflow runs them on the next code push | Local runs |
+| 426 offline tests | Pass locally. The `Tests` workflow runs them on every code push | Local runs |
 | Each free source on live data | Verified, all five context sources answered for all three coins | [44842220066](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44842220066), depth fix [44842558674](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44842558674) |
 | Kraken data export and factors on live data | Verified | [44848783647](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44848783647) |
 | Data validation on live data | Verified: 47 PASS, 1 WARN (real event), 0 FAIL. With the cross-coin check: 49 checks, 48 PASS, 1 WARN, 0 FAIL | [44849463885](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44849463885), [44852768752](https://github.com/rizwana-qa/crypto-watch-agent/actions/runs/44852768752) |
@@ -537,7 +538,7 @@ The five finished scenarios cost 116,419 tokens, about 23,000 each. A calm scena
 
 Run a batch with `python agent.py --test --only 10,14,11,3,8,12 --publish`, or in GitHub: Actions > Tests > Run workflow, with the `only` list and `publish` ticked. Every result goes to the `scenarios` tab, including a scenario that did not finish.
 
-**A push that changes code runs scenarios 1 to 7 with the real AI**, about 160,000 tokens at the measured average (an estimate), which would starve the daily run. Documentation-only changes do not trigger it, and commits that should not run it carry `[skip ci]`. `python agent.py --measure` (12 full runs of all 20 scenarios, more than 5 million tokens) needs the paid tier and cannot be done on the free one.
+**The scenarios with the real AI run only when you start them by hand** (Actions > Tests > Run workflow). A push that changes code runs the offline tests and nothing that calls Groq. This changed on 21 November: a push used to run scenarios 1 to 7 with the real AI, about 160,000 tokens at the measured average (an estimate), and on that day two such runs used up the 200,000-token daily allowance, so the next daily run failed with HTTP 429 and no email was sent. `[skip ci]` is still honoured by GitHub. `python agent.py --measure` (12 full runs of all 20 scenarios, more than 5 million tokens) needs the paid tier and cannot be done on the free one.
 
 ## Results and conclusion
 
@@ -640,7 +641,7 @@ Live run on 2026-11-20 (Actions > Daily crypto watch, version Agent loop). The a
 | `apps_script/Code.gs` | The Google Apps Script web app (history, save, append, report email). No key in it |
 | `tests/test_guardrails.py`, `test_context.py`, `test_report.py`, `test_emailbody.py`, `test_insights.py`, `test_rag.py`, `test_asktab.py`, `test_sources.py`, `test_export.py`, `test_validate.py`, `test_fetch_data.py`, `test_features.py` | The 395 offline tests |
 | `.github/workflows/daily.yml` | The daily run at 05:17 UTC (09:17 in Dubai) |
-| `.github/workflows/tests.yml` | The offline tests, and the scenario tests with the real AI, on every code or playbook change |
+| `.github/workflows/tests.yml` | The offline tests on every code or playbook change, and the scenario tests with the real AI when started by hand |
 | `.github/workflows/report.yml` | The executive brief, emailed once after each successful daily run, then the Ask page's index check (no AI) |
 | `.github/workflows/sources.yml` | The manual data check: every source once, the CSV export and the data validation. No AI |
 | `AI_LOG.md` | The prompts that mattered most, and what the AI got wrong or I changed |

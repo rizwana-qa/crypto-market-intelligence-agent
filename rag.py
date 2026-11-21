@@ -38,10 +38,15 @@ STOPWORDS = agent.STOPWORDS | EXTRA_STOPWORDS
 
 # A request for advice or a forecast. The tool explains the playbook, so these are declined by code and never reach the AI.
 ADVICE_REQUEST_RE = re.compile(
-    r"\b(?:should\s+(?:i|we)|shall\s+(?:i|we)|can\s+i\s+(?:buy|sell|trade|invest)|good\s+time\s+to|worth\s+(?:buying|selling)|"
+    r"\b(?:should\s+(?:i|we)|shall\s+(?:i|we)|can\s+i\s+(?:buy|sell|trade|invest)|(?:good|right|best|perfect)\s+(?:time|moment)\s+to|"
+    r"time\s+to\s+(?:buy|sell|enter|exit|accumulate)|worth\s+(?:buying|selling)|good\s+(?:investment|buy)|you\s+(?:recommend|advise)|"
+    r"whether\s+to\s+(?:buy|sell|hold|keep|trade|invest|exit|accumulate)\s+(?:my|our|more|some|any|btc|eth|xrp|bitcoin|ether)|"
     r"will\s+(?:it|btc|eth|xrp|bitcoin|ether|the\s+price|prices?)\s+(?:go|rise|fall|drop|moon|pump|dump|crash|hit|reach)|"
-    r"going\s+to\s+(?:rise|fall|drop|moon|pump|dump|crash)|price\s+(?:target|prediction)|predict|forecast|"
-    r"(?:buy|sell)\s+(?:now|today|signal)|financial\s+advice|investment\s+advice)\b", re.IGNORECASE)
+    r"will\s+(?:btc|eth|xrp|bitcoin|ether|ethereum|ripple|the\s+price|prices?)\s+be\s+(?:worth|at|above|below|higher|lower|priced|trading)|"
+    r"which\s+(?:coin|crypto|token|asset)s?\s+will\s+(?:go|rise|fall|drop|moon|pump|crash|outperform|underperform|win|beat)|"
+    r"going\s+to\s+(?:rise|fall|drop|moon|pump|dump|crash)|about\s+to\s+(?:crash|collapse|plunge|moon|pump|dump|surge|rally)|"
+    r"price\s+(?:target|prediction)|predict|forecast|(?:buy|sell)\s+(?:now|today|signal)|financial\s+advice|investment\s+advice)\b",
+    re.IGNORECASE)
 DECLINED = ("This page explains the playbook. It does not give advice to buy or sell, and it does not forecast prices.",
             "The agent only describes numbers and never tells anyone to act.")
 
@@ -80,6 +85,16 @@ def terms(text):
 # Words people use for "an alert fires" that the playbook words differently ("alert on a coin when ... breaches"). Applied to the
 # question only, never to the playbook text, so the agent's own search and the daily run are not touched.
 QUERY_SYNONYMS = {stem(word): ("breach", "threshold") for word in ("raise", "raised", "raising", "trigger", "triggered", "fire", "fires")}
+# More everyday words that the playbook words differently: (words a user may type, the playbook words they stand for). Same rule as above:
+# the question only. Every word is stemmed here, so both sides meet the stemmed index terms.
+EVERYDAY_WORDS = (
+    (("abnormal", "abnormally"), ("unusual", "breach")),
+    (("exchange",), ("kraken", "candle")),
+    (("leverage", "leveraged"), ("derivative", "futures")),
+    (("option", "options"), ("implied",)),
+    (("lag", "lags", "lagging", "lagged"), ("laggard", "underperform")),
+)
+QUERY_SYNONYMS.update({stem(word): tuple(stem(x) for x in extra) for words, extra in EVERYDAY_WORDS for word in words})
 
 
 class Index:

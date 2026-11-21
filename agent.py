@@ -1291,6 +1291,12 @@ def decide(mode, use_reviewer, tools):
     return final, evidence
 
 
+def has_valid_market_data(evidence):
+    """True when at least one get_market_summary result in the evidence is real data: a dict with no error.
+    Same rule as the 'no valid market data in this run' guardrail, plus a dict check so an odd tool result cannot count."""
+    return any(e["tool"] == "get_market_summary" and isinstance(e["result"], dict) and "error" not in e["result"] for e in evidence)
+
+
 def run_live(mode, use_reviewer, dry_run):
     version = version_name(mode, use_reviewer)
     log(f"Version: {version} | model: {MODEL} | watchlist: {', '.join(WATCHLIST)}")
@@ -1302,6 +1308,10 @@ def run_live(mode, use_reviewer, dry_run):
         deliver(decision, version)
         publish_market_data(evidence, version)
     log(f"Run finished: alert={decision['alert']} llm_calls={STATS['llm_calls']}")
+    if not has_valid_market_data(evidence):
+        # The rows are saved first (the log of what happened stays). The run is then red, so a data outage is not a green day.
+        print("ERROR: no valid market data for any coin, see the market rows", file=sys.stderr)
+        return 1
     return 0
 
 
